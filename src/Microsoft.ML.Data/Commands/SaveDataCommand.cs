@@ -2,16 +2,17 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System;
-using System.IO;
-using System.Linq;
-using System.Collections.Generic;
 using Microsoft.ML.Runtime;
 using Microsoft.ML.Runtime.Command;
 using Microsoft.ML.Runtime.CommandLine;
 using Microsoft.ML.Runtime.Data;
 using Microsoft.ML.Runtime.Data.IO;
 using Microsoft.ML.Runtime.Internal.Utilities;
+using Microsoft.ML.Transforms;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 
 [assembly: LoadableClass(SaveDataCommand.Summary, typeof(SaveDataCommand), typeof(SaveDataCommand.Arguments), typeof(SignatureCommand),
     "Save Data", "SaveData", "save")]
@@ -25,8 +26,8 @@ namespace Microsoft.ML.Runtime.Data
     {
         public sealed class Arguments : DataCommand.ArgumentsBase
         {
-            [Argument(ArgumentType.Multiple, HelpText = "The data saver to use", NullName = "<Auto>")]
-            public SubComponent<IDataSaver, SignatureDataSaver> Saver;
+            [Argument(ArgumentType.Multiple, HelpText = "The data saver to use", NullName = "<Auto>", SignatureType = typeof(SignatureDataSaver))]
+            public IComponentFactory<IDataSaver> Saver;
 
             [Argument(ArgumentType.AtMostOnce, HelpText = "File to save the data", ShortName = "dout")]
             public string OutputDataFile;
@@ -50,22 +51,35 @@ namespace Microsoft.ML.Runtime.Data
             using (var ch = Host.Start(command))
             {
                 RunCore(ch);
-                ch.Done();
             }
         }
 
         private void RunCore(IChannel ch)
         {
             Host.AssertValue(ch, "ch");
-            var sub = Args.Saver;
-            if (!sub.IsGood())
+            IDataSaver saver;
+            if (Args.Saver == null)
             {
                 var ext = Path.GetExtension(Args.OutputDataFile);
                 var isBinary = string.Equals(ext, ".idv", StringComparison.OrdinalIgnoreCase);
                 var isTranspose = string.Equals(ext, ".tdv", StringComparison.OrdinalIgnoreCase);
-                sub = new SubComponent<IDataSaver, SignatureDataSaver>(isBinary ? "BinarySaver" : isTranspose ? "TransposeSaver" : "TextSaver");
+                if (isBinary)
+                {
+                    saver = new BinarySaver(Host, new BinarySaver.Arguments());
+                }
+                else if (isTranspose)
+                {
+                    saver = new TransposeSaver(Host, new TransposeSaver.Arguments());
+                }
+                else
+                {
+                    saver = new TextSaver(Host, new TextSaver.Arguments());
+                }
             }
-            var saver = sub.CreateInstance(Host);
+            else
+            {
+                saver = Args.Saver.CreateComponent(Host);
+            }
 
             IDataLoader loader = CreateAndSaveLoader();
             using (var file = Host.CreateOutputFile(Args.OutputDataFile))
@@ -89,8 +103,8 @@ namespace Microsoft.ML.Runtime.Data
             [Argument(ArgumentType.AtMostOnce, HelpText = "Force dense format")]
             public bool Dense;
 
-            [Argument(ArgumentType.Multiple, HelpText = "The data saver to use", NullName = "<Auto>")]
-            public SubComponent<IDataSaver, SignatureDataSaver> Saver;
+            [Argument(ArgumentType.Multiple, HelpText = "The data saver to use", NullName = "<Auto>", SignatureType = typeof(SignatureDataSaver))]
+            public IComponentFactory<IDataSaver> Saver;
         }
 
         internal const string Summary = "Given input data, a loader, and possibly transforms, display a sample of the data file.";
@@ -106,7 +120,6 @@ namespace Microsoft.ML.Runtime.Data
             using (var ch = Host.Start(command))
             {
                 RunCore(ch);
-                ch.Done();
             }
         }
 
@@ -117,16 +130,15 @@ namespace Microsoft.ML.Runtime.Data
 
             if (!string.IsNullOrWhiteSpace(Args.Columns))
             {
-                var args = new ChooseColumnsTransform.Arguments();
-                args.Column = Args.Columns
-                    .Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(s => new ChooseColumnsTransform.Column() { Name = s }).ToArray();
-                if (Utils.Size(args.Column) > 0)
-                    data = new ChooseColumnsTransform(Host, args, data);
+                var keepColumns = Args.Columns
+                    .Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries).ToArray();
+                if (Utils.Size(keepColumns) > 0)
+                    data = ColumnSelectingTransformer.CreateKeep(Host, data, keepColumns);
             }
 
             IDataSaver saver;
-            if (Args.Saver.IsGood())
-                saver = Args.Saver.CreateInstance(Host);
+            if (Args.Saver != null)
+                saver = Args.Saver.CreateComponent(Host);
             else
                 saver = new TextSaver(Host, new TextSaver.Arguments() { Dense = Args.Dense });
             var cols = new List<int>();

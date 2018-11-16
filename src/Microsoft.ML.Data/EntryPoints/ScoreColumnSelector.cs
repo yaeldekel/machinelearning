@@ -2,13 +2,12 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using Microsoft.ML.Runtime.CommandLine;
+using Microsoft.ML.Runtime.Data;
+using Microsoft.ML.Transforms;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Microsoft.ML.Runtime;
-using Microsoft.ML.Runtime.CommandLine;
-using Microsoft.ML.Runtime.Data;
-using Microsoft.ML.Runtime.EntryPoints;
 
 namespace Microsoft.ML.Runtime.EntryPoints
 {
@@ -26,9 +25,8 @@ namespace Microsoft.ML.Runtime.EntryPoints
             Contracts.CheckValue(env, nameof(env));
             env.CheckValue(input, nameof(input));
             EntryPointUtils.CheckInputArgs(env, input);
-            int colMax;
             var view = input.Data;
-            var maxScoreId = view.Schema.GetMaxMetadataKind(out colMax, MetadataUtils.Kinds.ScoreColumnSetId);
+            var maxScoreId = view.Schema.GetMaxMetadataKind(out int colMax, MetadataUtils.Kinds.ScoreColumnSetId);
             List<int> indices = new List<int>();
             for (int i = 0; i < view.Schema.ColumnCount; i++)
             {
@@ -42,7 +40,7 @@ namespace Microsoft.ML.Runtime.EntryPoints
             return new CommonOutputs.TransformOutput { Model = new TransformModel(env, newView, input.Data), OutputData = newView };
         }
 
-        private static bool ShouldAddColumn(ISchema schema, int i, string[] extraColumns, uint scoreSet)
+        private static bool ShouldAddColumn(Schema schema, int i, string[] extraColumns, uint scoreSet)
         {
             uint scoreSetId = 0;
             if (schema.TryGetMetadata(MetadataUtils.ScoreColumnSetIdType.AsPrimitive, MetadataUtils.Kinds.ScoreColumnSetId, i, ref scoreSetId)
@@ -82,7 +80,7 @@ namespace Microsoft.ML.Runtime.EntryPoints
                     // Rename all the score columns.
                     int colMax;
                     var maxScoreId = input.Data.Schema.GetMaxMetadataKind(out colMax, MetadataUtils.Kinds.ScoreColumnSetId);
-                    var copyCols = new List<CopyColumnsTransform.Column>();
+                    var copyCols = new List<(string Source, string Name)>();
                     for (int i = 0; i < input.Data.Schema.ColumnCount; i++)
                     {
                         if (input.Data.Schema.IsHidden(i))
@@ -90,20 +88,20 @@ namespace Microsoft.ML.Runtime.EntryPoints
                         if (!ShouldAddColumn(input.Data.Schema, i, null, maxScoreId))
                             continue;
                         // Do not rename the PredictedLabel column.
-                        DvText tmp = default(DvText);
+                        ReadOnlyMemory<char> tmp = default;
                         if (input.Data.Schema.TryGetMetadata(TextType.Instance, MetadataUtils.Kinds.ScoreValueKind, i,
                             ref tmp)
-                            && tmp.EqualsStr(MetadataUtils.Const.ScoreValueKind.PredictedLabel))
+                            && ReadOnlyMemoryUtils.EqualsStr(MetadataUtils.Const.ScoreValueKind.PredictedLabel, tmp))
                         {
                             continue;
                         }
                         var source = input.Data.Schema.GetColumnName(i);
                         var name = source + "." + positiveClass;
-                        copyCols.Add(new CopyColumnsTransform.Column() { Name = name, Source = source });
+                        copyCols.Add((source, name));
                     }
 
-                    var copyColumn = new CopyColumnsTransform(env, new CopyColumnsTransform.Arguments() { Column = copyCols.ToArray() }, input.Data);
-                    var dropColumn = new DropColumnsTransform(env, new DropColumnsTransform.Arguments() { Column = copyCols.Select(c => c.Source).ToArray() }, copyColumn);
+                    var copyColumn = new ColumnsCopyingTransformer(env, copyCols.ToArray()).Transform(input.Data);
+                    var dropColumn = ColumnSelectingTransformer.CreateDrop(env, copyColumn, copyCols.Select(c => c.Source).ToArray());
                     return new CommonOutputs.TransformOutput { Model = new TransformModel(env, dropColumn, input.Data), OutputData = dropColumn };
                 }
             }

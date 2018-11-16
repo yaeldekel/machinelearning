@@ -2,11 +2,12 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using Microsoft.ML.Runtime;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
 
-namespace Microsoft.ML.Runtime.FastTree.Internal
+namespace Microsoft.ML.Trainers.FastTree.Internal
 {
 #if USE_SINGLE_PRECISION
     using FloatType = System.Single;
@@ -18,7 +19,7 @@ namespace Microsoft.ML.Runtime.FastTree.Internal
     /// This <see cref="IntArray"/> implementation represents a sequence of values using parallel
     /// arrays of both values, as well as deltas indicating the number of values to the next
     /// explicit value. Values "between" these deltas are implicitly zero.
-    /// 
+    ///
     /// Note that it is possible to misuse the deltas by making some of them themselves 0, allowing
     /// us to represent multiple values per row. In this case, <see cref="IntArray.GetEnumerator"/>
     /// and <see cref="IntArray.GetIndexer"/> will not have sensible values, but
@@ -490,12 +491,12 @@ namespace Microsoft.ML.Runtime.FastTree.Internal
 
 #if USE_FASTTREENATIVE
         [DllImport("FastTreeNative", CallingConvention = CallingConvention.StdCall)]
-        private unsafe static extern int C_SumupDeltaSparse_float(int numBits, byte* pValues, byte* pDeltas, int numDeltas, int* pIndices, float* pSampleOutputs, double* pSampleOutputWeights,
+        private static extern unsafe int C_SumupDeltaSparse_float(int numBits, byte* pValues, byte* pDeltas, int numDeltas, int* pIndices, float* pSampleOutputs, double* pSampleOutputWeights,
                                   float* pSumTargetsByBin, double* pSumTargets2ByBin, int* pCountByBin,
                                   int totalCount, double totalSampleOutputs, double totalSampleOutputWeights);
 
         [DllImport("FastTreeNative", CallingConvention = CallingConvention.StdCall)]
-        private unsafe static extern int C_SumupDeltaSparse_double(int numBits, byte* pValues, byte* pDeltas, int numDeltas, int* pIndices, double* pSampleOutputs, double* pSampleOutputWeights,
+        private static extern unsafe int C_SumupDeltaSparse_double(int numBits, byte* pValues, byte* pDeltas, int numDeltas, int* pIndices, double* pSampleOutputs, double* pSampleOutputWeights,
                                   double* pSumTargetsByBin, double* pSumTargets2ByBin, int* pCountByBin,
                                   int totalCount, double totalSampleOutputs, double totalSampleOutputWeights);
 
@@ -546,12 +547,8 @@ namespace Microsoft.ML.Runtime.FastTree.Internal
             {
                 get
                 {
-                    //if (virtualIndex < _index) throw new Exception("Index must move forward");
-
                     if (virtualIndex < _nextIndex)
                         return 0;
-
-                    //if (virtualIndex >= _array._length) throw new IndexOutOfRangeException();
 
                     if (virtualIndex == _nextIndex)
                         return _array._values[_pos];
@@ -561,7 +558,6 @@ namespace Microsoft.ML.Runtime.FastTree.Internal
                     {
                         while (_pos < _array._values.Length)
                         {
-                            //_index = _nextIndex;
                             _nextIndex += pDeltas[_pos];
                             if (virtualIndex < _nextIndex)
                                 return 0;

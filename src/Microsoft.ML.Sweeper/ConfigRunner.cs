@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using Microsoft.ML;
 using Microsoft.ML.Runtime;
 using Microsoft.ML.Runtime.CommandLine;
+using Microsoft.ML.Runtime.EntryPoints;
 using Microsoft.ML.Runtime.Internal.Utilities;
 using Microsoft.ML.Runtime.Sweeper;
 
@@ -46,9 +47,9 @@ namespace Microsoft.ML.Runtime.Sweeper
             [Argument(ArgumentType.AtMostOnce, HelpText = "The executable name, including the path (the default is MAML.exe)")]
             public string Exe;
 
-            [Argument(ArgumentType.Multiple, HelpText = "Specify how to extract the metrics from the result file.", ShortName = "ev")]
-            public SubComponent<ISweepResultEvaluator<string>, SignatureSweepResultEvaluator> ResultProcessor
-                = new SubComponent<ISweepResultEvaluator<string>, SignatureSweepResultEvaluator>("Tlc");
+            [Argument(ArgumentType.Multiple, HelpText = "Specify how to extract the metrics from the result file.", ShortName = "ev", SignatureType = typeof(SignatureSweepResultEvaluator))]
+            public IComponentFactory<ISweepResultEvaluator<string>> ResultProcessor = ComponentFactoryUtils.CreateFromFunction(
+                env => new InternalSweepResultEvaluator(env, new InternalSweepResultEvaluator.Arguments()));
 
             [Argument(ArgumentType.AtMostOnce, Hide = true)]
             public bool CalledFromUnitTestSuite;
@@ -74,7 +75,7 @@ namespace Microsoft.ML.Runtime.Sweeper
             ArgsPattern = args.ArgsPattern;
             OutputFolder = GetOutputFolderPath(args.OutputFolderName);
             Prefix = string.IsNullOrEmpty(args.Prefix) ? "" : args.Prefix;
-            ResultProcessor = args.ResultProcessor.CreateInstance(Host);
+            ResultProcessor = args.ResultProcessor.CreateComponent(Host);
             _calledFromUnitTestSuite = args.CalledFromUnitTestSuite;
             RunNums = new List<int>();
         }
@@ -106,7 +107,10 @@ namespace Microsoft.ML.Runtime.Sweeper
             if (Exe == null || Exe.EndsWith("maml", StringComparison.OrdinalIgnoreCase) ||
                 Exe.EndsWith("maml.exe", StringComparison.OrdinalIgnoreCase))
             {
+                string currentDirectory = Path.GetDirectoryName(typeof(ExeConfigRunnerBase).Module.FullyQualifiedName);
+
                 using (var ch = Host.Start("Finish"))
+                using (AssemblyLoadingUtils.CreateAssemblyRegistrar(Host, currentDirectory))
                 {
                     var runs = RunNums.ToArray();
                     var args = Utils.BuildArray(RunNums.Count + 2,
@@ -119,10 +123,9 @@ namespace Microsoft.ML.Runtime.Sweeper
                             return string.Format("{{{0}}}", GetFilePath(runs[i], "out"));
                         });
 
-                    ResultProcessorInternal.ResultProcessor.Main (args);
+                    ResultProcessorInternal.ResultProcessor.Main(args);
 
                     ch.Info(@"The summary of the run results has been saved to the file {0}\{1}.summary.txt", OutputFolder, Prefix);
-                    ch.Done();
                 }
             }
         }
@@ -164,9 +167,7 @@ namespace Microsoft.ML.Runtime.Sweeper
                 for (int i = 0; i < sweeps.Length; i++)
                     ch.Info("Parameter set: {0}", string.Join(", ", sweeps[i].Select(p => string.Format("{0}:{1}", p.Name, p.ValueText))));
 
-                var res = RunConfigsCore(sweeps, ch, min);
-                ch.Done();
-                return res;
+               return RunConfigsCore(sweeps, ch, min);
             }
         }
 

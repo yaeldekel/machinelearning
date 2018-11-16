@@ -20,7 +20,8 @@ namespace Microsoft.ML.Runtime.Model.Pfa
     /// has facilities to remember what column name in <see cref="IDataView"/> maps to
     /// what token in the PFA being built up.
     /// </summary>
-    public sealed class BoundPfaContext
+    [BestFriend]
+    internal sealed class BoundPfaContext
     {
         /// <summary>
         /// The internal PFA context, for an escape hatch.
@@ -33,14 +34,14 @@ namespace Microsoft.ML.Runtime.Model.Pfa
         /// </summary>
         private readonly Dictionary<string, string> _nameToVarName;
         /// <summary>
-        /// This contains a map of those names in 
+        /// This contains a map of those names in
         /// </summary>
         private readonly HashSet<string> _unavailable;
 
         private readonly bool _allowSet;
         private readonly IHost _host;
 
-        public BoundPfaContext(IHostEnvironment env, ISchema inputSchema, HashSet<string> toDrop, bool allowSet)
+        public BoundPfaContext(IHostEnvironment env, Schema inputSchema, HashSet<string> toDrop, bool allowSet)
         {
             Contracts.CheckValue(env, nameof(env));
             _host = env.Register(nameof(BoundPfaContext));
@@ -54,7 +55,7 @@ namespace Microsoft.ML.Runtime.Model.Pfa
             SetInput(inputSchema, toDrop);
         }
 
-        private void SetInput(ISchema schema, HashSet<string> toDrop)
+        private void SetInput(Schema schema, HashSet<string> toDrop)
         {
             var recordType = new JObject();
             recordType["type"] = "record";

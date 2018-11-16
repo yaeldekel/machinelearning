@@ -55,11 +55,10 @@ namespace Microsoft.ML.Runtime
     }
 #endif
 
-#if PRIVATE_CONTRACTS
-    internal static partial class Contracts
-#else
-    public static partial class Contracts
+#if !PRIVATE_CONTRACTS
+    [BestFriend]
 #endif
+    internal static partial class Contracts
     {
         public const string IsMarkedKey = "ML_IsMarked";
         public const string SensitivityKey = "ML_Sensitivity";
@@ -167,7 +166,7 @@ namespace Microsoft.ML.Runtime
         /// there will be performance implications. There shouldn't be, since checks rarely happen in
         /// tight loops.
         /// </summary>
-        private struct SensitiveExceptionContext : IExceptionContext
+        private readonly struct SensitiveExceptionContext : IExceptionContext
         {
             /// <summary>
             /// We will run this instances <see cref="IExceptionContext.Process{TException}(TException)"/> first.
@@ -284,9 +283,9 @@ namespace Microsoft.ML.Runtime
         /// For signalling bad user input.
         /// </summary>
         public static Exception ExceptUserArg(string name)
-            =>Process(new ArgumentOutOfRangeException(name));
+            => Process(new ArgumentOutOfRangeException(name));
         public static Exception ExceptUserArg(this IExceptionContext ctx, string name)
-            =>Process(new ArgumentOutOfRangeException(name), ctx);
+            => Process(new ArgumentOutOfRangeException(name), ctx);
         public static Exception ExceptUserArg(string name, string msg)
             => Process(new ArgumentOutOfRangeException(name, msg));
         public static Exception ExceptUserArg(this IExceptionContext ctx, string name, string msg)
@@ -448,6 +447,25 @@ namespace Microsoft.ML.Runtime
         public static Exception ExceptNotSupp(this IExceptionContext ctx, string msg, params object[] args)
             => Process(new NotSupportedException(GetMsg(msg, args)), ctx);
 
+        /// <summary>
+        /// For signalling schema validation issues.
+        /// </summary>
+        public static Exception ExceptSchemaMismatch(string paramName, string columnRole, string columnName)
+            => Process(new ArgumentOutOfRangeException(paramName, MakeSchemaMismatchMsg(columnRole, columnName)));
+        public static Exception ExceptSchemaMismatch(this IExceptionContext ctx, string paramName, string columnRole, string columnName)
+            => Process(new ArgumentOutOfRangeException(paramName, MakeSchemaMismatchMsg(columnRole, columnName)), ctx);
+        public static Exception ExceptSchemaMismatch(string paramName, string columnRole, string columnName, string expectedType, string actualType)
+            => Process(new ArgumentOutOfRangeException(paramName, MakeSchemaMismatchMsg(columnRole, columnName, expectedType, actualType)));
+        public static Exception ExceptSchemaMismatch(this IExceptionContext ctx, string paramName, string columnRole, string columnName, string expectedType, string actualType)
+            => Process(new ArgumentOutOfRangeException(paramName, MakeSchemaMismatchMsg(columnRole, columnName, expectedType, actualType)), ctx);
+
+        private static string MakeSchemaMismatchMsg(string columnRole, string columnName, string expectedType = null, string actualType = null)
+        {
+            if (actualType == null)
+                return $"Could not find {columnRole} column '{columnName}'";
+            return $"Schema mismatch for {columnRole} column '{columnName}': expected {expectedType}, got {actualType}";
+        }
+
         // Check - these check a condition and if it fails, throw the corresponding exception.
         // NOTE: The ordering of arguments to these is standardized to be:
         // * boolean condition
@@ -548,6 +566,13 @@ namespace Microsoft.ML.Runtime
         {
             if (object.ReferenceEquals(val, null))
                 throw ExceptValue(ctx, paramName);
+            return val;
+        }
+
+        public static T CheckRef<T>(this IExceptionContext ctx, T val, string paramName, string msg) where T : class
+        {
+            if (object.ReferenceEquals(val, null))
+                throw ExceptValue(ctx, paramName, msg);
             return val;
         }
 
@@ -741,7 +766,7 @@ namespace Microsoft.ML.Runtime
 
         // Assert
 
-#region Private assert handling
+        #region Private assert handling
 
         private static void DbgFailCore(string msg, IExceptionContext ctx = null)
         {
@@ -800,7 +825,7 @@ namespace Microsoft.ML.Runtime
             DbgFailCore(string.Format(CultureInfo.InvariantCulture, "Non-empty assertion failure: {0}", msg), ctx);
         }
 
-#endregion Private assert handling
+        #endregion Private assert handling
 
         [Conditional("DEBUG")]
         public static void Assert(bool f)
@@ -917,6 +942,19 @@ namespace Microsoft.ML.Runtime
         {
             if (string.IsNullOrWhiteSpace(s))
                 DbgFailEmpty(ctx, msg);
+        }
+
+        [Conditional("DEBUG")]
+        public static void AssertNonEmpty<T>(ReadOnlySpan<T> args)
+        {
+            if (args.IsEmpty)
+                DbgFail();
+        }
+        [Conditional("DEBUG")]
+        public static void AssertNonEmpty<T>(Span<T> args)
+        {
+            if (args.IsEmpty)
+                DbgFail();
         }
 
         [Conditional("DEBUG")]

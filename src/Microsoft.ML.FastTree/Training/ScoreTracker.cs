@@ -2,11 +2,12 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using Microsoft.ML.Runtime;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
-namespace Microsoft.ML.Runtime.FastTree.Internal
+namespace Microsoft.ML.Trainers.FastTree.Internal
 {
     public class ScoreTracker
     {
@@ -53,7 +54,7 @@ namespace Microsoft.ML.Runtime.FastTree.Internal
         }
 
         //InitScores -initScores can be null in such case the scores are reinitialized to Zero
-        private void InitializeScores(double[] initScores /* = null */)
+        private void InitializeScores(double[] initScores)
         {
             if (initScores == null)
             {

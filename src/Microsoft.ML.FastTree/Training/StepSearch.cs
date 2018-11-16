@@ -2,10 +2,11 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using Microsoft.ML.Runtime;
 using System;
 using System.Linq;
 
-namespace Microsoft.ML.Runtime.FastTree.Internal
+namespace Microsoft.ML.Trainers.FastTree.Internal
 {
     public interface IStepSearch
     {
@@ -30,7 +31,7 @@ namespace Microsoft.ML.Runtime.FastTree.Internal
             _historicStepSize = Math.Max(1.0, _minStepSize);
         }
 
-        private readonly static double _phi = (1.0 + Math.Sqrt(5)) / 2;
+        private static readonly double _phi = (1.0 + Math.Sqrt(5)) / 2;
 
         private static void Swap<T>(ref T a, ref T b)
         {

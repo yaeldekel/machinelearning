@@ -35,7 +35,7 @@ namespace Microsoft.ML.Runtime.EntryPoints
             Contracts.AssertValue(val);
             Func<TlcModule.RangeAttribute, object, bool> fn = IsValueWithinRange<int>;
             // Avoid trying to cast double as float. If range
-            // was specified using floats, but value being checked 
+            // was specified using floats, but value being checked
             // is double, change range to be of type double
             if (range.Type == typeof(float) && val is double)
                 range.CastToDouble();
@@ -101,7 +101,7 @@ namespace Microsoft.ML.Runtime.EntryPoints
         /// and the column name was explicitly specified. If the column is not found
         /// and the column name was not explicitly specified, it returns null.
         /// </summary>
-        public static string FindColumnOrNull(IExceptionContext ectx, ISchema schema, Optional<string> value)
+        public static string FindColumnOrNull(IExceptionContext ectx, Schema schema, Optional<string> value)
         {
             Contracts.CheckValueOrNull(ectx);
             ectx.CheckValue(schema, nameof(schema));

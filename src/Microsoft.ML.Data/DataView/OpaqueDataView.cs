@@ -14,16 +14,16 @@ namespace Microsoft.ML.Runtime.Data
     {
         private readonly IDataView _source;
         public bool CanShuffle => _source.CanShuffle;
-        public ISchema Schema => _source.Schema;
+        public Schema Schema => _source.Schema;
 
         public OpaqueDataView(IDataView source)
         {
             _source = source;
         }
 
-        public long? GetRowCount(bool lazy = true)
+        public long? GetRowCount()
         {
-            return _source.GetRowCount(lazy);
+            return _source.GetRowCount();
         }
 
         public IRowCursor GetRowCursor(Func<int, bool> predicate, IRandom rand = null)

@@ -6,22 +6,24 @@ using Microsoft.ML.Runtime.Data;
 
 namespace Microsoft.ML.Runtime.Model.Onnx
 {
-    public interface ICanSaveOnnx
+    [BestFriend]
+    internal interface ICanSaveOnnx
     {
         /// <summary>
         /// Whether this object really is capable of saving itself as part of an ONNX
         /// pipeline. An implementor of this object might implement this interface,
         /// but still return <c>false</c> if there is some characteristic of this object
-        /// only detectable during runtime that would prevent its being savable. (E.g.,
+        /// only detectable during runtime that would prevent its being savable. (For example,
         /// it may wrap some other object that may or may not be savable.)
         /// </summary>
-        bool CanSaveOnnx { get; }
+        bool CanSaveOnnx(OnnxContext ctx);
     }
 
     /// <summary>
-    /// This data model component is savable as Onnx.
+    /// This component know how to save himself in ONNX format.
     /// </summary>
-    public interface ITransformCanSaveOnnx: ICanSaveOnnx, IDataTransform
+    [BestFriend]
+    internal interface ISaveAsOnnx : ICanSaveOnnx
     {
         /// <summary>
         /// Save as ONNX.
@@ -31,11 +33,20 @@ namespace Microsoft.ML.Runtime.Model.Onnx
     }
 
     /// <summary>
+    /// This data model component is savable as ONNX.
+    /// </summary>
+    [BestFriend]
+    internal interface ITransformCanSaveOnnx : ISaveAsOnnx, IDataTransform
+    {
+    }
+
+    /// <summary>
     /// This <see cref="ISchemaBindableMapper"/> is savable in ONNX. Note that this is
     /// typically called within an <see cref="IDataScorerTransform"/> that is wrapping
     /// this mapper, and has already been bound to it.
     /// </summary>
-    public interface IBindableCanSaveOnnx : ICanSaveOnnx, ISchemaBindableMapper
+    [BestFriend]
+    internal interface IBindableCanSaveOnnx : ICanSaveOnnx, ISchemaBindableMapper
     {
         /// <summary>
         /// Save as ONNX. If <see cref="ICanSaveOnnx.CanSaveOnnx"/> is
@@ -59,7 +70,8 @@ namespace Microsoft.ML.Runtime.Model.Onnx
     /// For simple mappers. Intended to be used for <see cref="IValueMapper"/> and
     /// <see cref="Microsoft.ML.Runtime.Internal.Calibration.ICalibrator"/> instances.
     /// </summary>
-    public interface ISingleCanSaveOnnx : ICanSaveOnnx
+    [BestFriend]
+    internal interface ISingleCanSaveOnnx : ICanSaveOnnx
     {
         bool SaveAsOnnx(OnnxContext ctx, string[] outputNames, string featureColumn);
     }
@@ -68,7 +80,8 @@ namespace Microsoft.ML.Runtime.Model.Onnx
     /// For simple mappers. Intended to be used for <see cref="IValueMapperDist"/>
     /// instances.
     /// </summary>
-    public interface IDistCanSaveOnnx : ISingleCanSaveOnnx, IValueMapperDist
+    [BestFriend]
+    internal interface IDistCanSaveOnnx : ISingleCanSaveOnnx, IValueMapperDist
     {
         new bool SaveAsOnnx(OnnxContext ctx, string[] outputNames, string featureColumn);
     }

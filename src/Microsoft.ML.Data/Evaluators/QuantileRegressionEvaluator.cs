@@ -46,7 +46,7 @@ namespace Microsoft.ML.Runtime.Data
             int scoreSize = scoreInfo.Type.VectorSize;
             var type = schema.Schema.GetMetadataTypeOrNull(MetadataUtils.Kinds.SlotNames, scoreInfo.Index);
             Host.Check(type != null && type.IsKnownSizeVector && type.ItemType.IsText, "Quantile regression score column must have slot names");
-            var quantiles = default(VBuffer<DvText>);
+            var quantiles = default(VBuffer<ReadOnlyMemory<char>>);
             schema.Schema.GetMetadata(MetadataUtils.Kinds.SlotNames, scoreInfo.Index, ref quantiles);
             Host.Assert(quantiles.IsDense && quantiles.Length == scoreSize);
 
@@ -73,11 +73,11 @@ namespace Microsoft.ML.Runtime.Data
             var scoreInfo = schema.GetUniqueColumn(MetadataUtils.Const.ScoreValueKind.Score);
             var t = scoreInfo.Type;
             Host.Assert(t.VectorSize > 0 && (t.ItemType == NumberType.R4 || t.ItemType == NumberType.R8));
-            var slotNames = default(VBuffer<DvText>);
+            var slotNames = default(VBuffer<ReadOnlyMemory<char>>);
             t = schema.Schema.GetMetadataTypeOrNull(MetadataUtils.Kinds.SlotNames, scoreInfo.Index);
             if (t != null && t.VectorSize == scoreInfo.Type.VectorSize && t.ItemType.IsText)
                 schema.Schema.GetMetadata(MetadataUtils.Kinds.SlotNames, scoreInfo.Index, ref slotNames);
-            return new Aggregator(Host, LossFunction, schema.Weight != null, scoreInfo.Type.VectorSize, ref slotNames, stratName);
+            return new Aggregator(Host, LossFunction, schema.Weight != null, scoreInfo.Type.VectorSize, in slotNames, stratName);
         }
 
         public override IEnumerable<MetricColumn> GetOverallMetricColumns()
@@ -132,22 +132,23 @@ namespace Microsoft.ML.Runtime.Data
                     TotalLoss = VBufferUtils.CreateDense<Double>(size);
                 }
 
-                protected override void UpdateCore(Float label, ref VBuffer<Float> score, ref VBuffer<Double> loss, Float weight)
+                protected override void UpdateCore(Float label, in VBuffer<Float> score, in VBuffer<Double> loss, Float weight)
                 {
-                    AddL1AndL2Loss(label, ref score, weight);
-                    AddCustomLoss(weight, ref loss);
+                    AddL1AndL2Loss(label, in score, weight);
+                    AddCustomLoss(weight, in loss);
                 }
 
-                private void AddL1AndL2Loss(Float label, ref VBuffer<Float> score, Float weight)
+                private void AddL1AndL2Loss(Float label, in VBuffer<Float> score, Float weight)
                 {
                     Contracts.Check(score.Length == TotalL1Loss.Length, "Vectors must have the same dimensionality.");
 
+                    var scoreValues = score.GetValues();
                     if (score.IsDense)
                     {
                         // Both are dense.
-                        for (int i = 0; i < score.Length; i++)
+                        for (int i = 0; i < scoreValues.Length; i++)
                         {
-                            var diff = Math.Abs((Double)label - score.Values[i]);
+                            var diff = Math.Abs((Double)label - scoreValues[i]);
                             var weightedDiff = diff * weight;
                             TotalL1Loss.Values[i] += weightedDiff;
                             TotalL2Loss.Values[i] += diff * weightedDiff;
@@ -156,33 +157,36 @@ namespace Microsoft.ML.Runtime.Data
                     }
 
                     // score is sparse, and _totalL1Loss is dense.
-                    for (int i = 0; i < score.Count; i++)
+                    var scoreIndices = score.GetIndices();
+                    for (int i = 0; i < scoreValues.Length; i++)
                     {
-                        var diff = Math.Abs((Double)label - score.Values[i]);
+                        var diff = Math.Abs((Double)label - scoreValues[i]);
                         var weightedDiff = diff * weight;
-                        TotalL1Loss.Values[score.Indices[i]] += weightedDiff;
-                        TotalL2Loss.Values[score.Indices[i]] += diff * weightedDiff;
+                        TotalL1Loss.Values[scoreIndices[i]] += weightedDiff;
+                        TotalL2Loss.Values[scoreIndices[i]] += diff * weightedDiff;
                     }
                 }
 
-                private void AddCustomLoss(Float weight, ref VBuffer<Double> loss)
+                private void AddCustomLoss(Float weight, in VBuffer<Double> loss)
                 {
                     Contracts.Check(loss.Length == TotalL1Loss.Length, "Vectors must have the same dimensionality.");
 
+                    var lossValues = loss.GetValues();
                     if (loss.IsDense)
                     {
                         // Both are dense.
-                        for (int i = 0; i < loss.Length; i++)
-                            TotalLoss.Values[i] += loss.Values[i] * weight;
+                        for (int i = 0; i < lossValues.Length; i++)
+                            TotalLoss.Values[i] += lossValues[i] * weight;
                         return;
                     }
 
                     // loss is sparse, and _totalL1Loss is dense.
-                    for (int i = 0; i < loss.Count; i++)
-                        TotalLoss.Values[loss.Indices[i]] += loss.Values[i] * weight;
+                    var lossIndices = loss.GetIndices();
+                    for (int i = 0; i < lossValues.Length; i++)
+                        TotalLoss.Values[lossIndices[i]] += lossValues[i] * weight;
                 }
 
-                protected override void Normalize(ref VBuffer<Double> src, ref VBuffer<Double> dst)
+                protected override void Normalize(in VBuffer<Double> src, ref VBuffer<Double> dst)
                 {
                     Contracts.Assert(SumWeights > 0);
                     Contracts.Assert(src.IsDense);
@@ -205,14 +209,14 @@ namespace Microsoft.ML.Runtime.Data
             private readonly Counters _counters;
             private readonly Counters _weightedCounters;
 
-            private VBuffer<DvText> _slotNames;
+            private VBuffer<ReadOnlyMemory<char>> _slotNames;
 
             public override CountersBase UnweightedCounters { get { return _counters; } }
 
             public override CountersBase WeightedCounters { get { return _weightedCounters; } }
 
             public Aggregator(IHostEnvironment env, IRegressionLoss lossFunction, bool weighted, int size,
-                ref VBuffer<DvText> slotNames, string stratName)
+                in VBuffer<ReadOnlyMemory<char>> slotNames, string stratName)
                 : base(env, lossFunction, weighted, stratName)
             {
                 Host.Assert(size > 0);
@@ -225,16 +229,16 @@ namespace Microsoft.ML.Runtime.Data
                 _slotNames = slotNames;
             }
 
-            protected override void ApplyLossFunction(ref VBuffer<float> score, float label, ref VBuffer<Double> loss)
+            protected override void ApplyLossFunction(in VBuffer<float> score, float label, ref VBuffer<Double> loss)
             {
                 VBufferUtils.PairManipulator<Float, Double> lossFn =
                     (int slot, Float src, ref Double dst) => dst = LossFunction.Loss(src, label);
-                VBufferUtils.ApplyWith(ref score, ref loss, lossFn);
+                VBufferUtils.ApplyWith(in score, ref loss, lossFn);
             }
 
-            protected override bool IsNaN(ref VBuffer<Float> score)
+            protected override bool IsNaN(in VBuffer<Float> score)
             {
-                return VBufferUtils.HasNaNs(ref score);
+                return VBufferUtils.HasNaNs(in score);
             }
 
             public override void AddColumn(ArrayDataViewBuilder dvBldr, string metricName, params VBuffer<Double>[] metric)
@@ -242,8 +246,8 @@ namespace Microsoft.ML.Runtime.Data
                 Host.AssertValue(dvBldr);
                 if (_slotNames.Length > 0)
                 {
-                    ValueGetter<VBuffer<DvText>> getSlotNames =
-                        (ref VBuffer<DvText> dst) => dst = _slotNames;
+                    ValueGetter<VBuffer<ReadOnlyMemory<char>>> getSlotNames =
+                        (ref VBuffer<ReadOnlyMemory<char>> dst) => dst = _slotNames;
                     dvBldr.AddColumn(metricName, getSlotNames, NumberType.R8, metric);
                 }
                 else
@@ -262,7 +266,8 @@ namespace Microsoft.ML.Runtime.Data
                 verWrittenCur: 0x00010001, // Initial
                 verReadableCur: 0x00010001,
                 verWeCanReadBack: 0x00010001,
-                loaderSignature: LoaderSignature);
+                loaderSignature: LoaderSignature,
+                loaderAssemblyName: typeof(QuantileRegressionPerInstanceEvaluator).Assembly.FullName);
         }
 
         private const int L1Col = 0;
@@ -272,10 +277,10 @@ namespace Microsoft.ML.Runtime.Data
         public const string L2 = "L2-loss";
 
         private readonly int _scoreSize;
-        private readonly DvText[] _quantiles;
+        private readonly ReadOnlyMemory<char>[] _quantiles;
         private readonly ColumnType _outputType;
 
-        public QuantileRegressionPerInstanceEvaluator(IHostEnvironment env, ISchema schema, string scoreCol, string labelCol, int scoreSize, DvText[] quantiles)
+        public QuantileRegressionPerInstanceEvaluator(IHostEnvironment env, ISchema schema, string scoreCol, string labelCol, int scoreSize, ReadOnlyMemory<char>[] quantiles)
             : base(env, schema, scoreCol, labelCol)
         {
             Host.CheckParam(scoreSize > 0, nameof(scoreSize), "must be greater than 0");
@@ -299,9 +304,9 @@ namespace Microsoft.ML.Runtime.Data
 
             _scoreSize = ctx.Reader.ReadInt32();
             Host.CheckDecode(_scoreSize > 0);
-            _quantiles = new DvText[_scoreSize];
+            _quantiles = new ReadOnlyMemory<char>[_scoreSize];
             for (int i = 0; i < _scoreSize; i++)
-                _quantiles[i] = new DvText(ctx.LoadNonEmptyString());
+                _quantiles[i] = ctx.LoadNonEmptyString().AsMemory();
             _outputType = new VectorType(NumberType.R8, _scoreSize);
         }
 
@@ -338,32 +343,33 @@ namespace Microsoft.ML.Runtime.Data
                 col => (activeOutput(L1Col) || activeOutput(L2Col)) && (col == ScoreIndex || col == LabelIndex);
         }
 
-        public override RowMapperColumnInfo[] GetOutputColumns()
+        public override Schema.Column[] GetOutputColumns()
         {
-            var infos = new RowMapperColumnInfo[2];
+            var infos = new Schema.Column[2];
 
             var slotNamesType = new VectorType(TextType.Instance, _scoreSize);
-            var l1Metadata = new ColumnMetadataInfo(L1);
-            l1Metadata.Add(MetadataUtils.Kinds.SlotNames, new MetadataInfo<VBuffer<DvText>>(slotNamesType, CreateSlotNamesGetter(L1)));
-            var l2Metadata = new ColumnMetadataInfo(L2);
-            l2Metadata.Add(MetadataUtils.Kinds.SlotNames, new MetadataInfo<VBuffer<DvText>>(slotNamesType, CreateSlotNamesGetter(L2)));
+            var l1Metadata = new Schema.Metadata.Builder();
+            l1Metadata.AddSlotNames(_scoreSize, CreateSlotNamesGetter(L1));
 
-            infos[L1Col] = new RowMapperColumnInfo(L1, _outputType, l1Metadata);
-            infos[L2Col] = new RowMapperColumnInfo(L2, _outputType, l2Metadata);
+            var l2Metadata = new Schema.Metadata.Builder();
+            l2Metadata.AddSlotNames(_scoreSize, CreateSlotNamesGetter(L2));
+
+            infos[L1Col] = new Schema.Column(L1, _outputType, l1Metadata.GetMetadata());
+            infos[L2Col] = new Schema.Column(L2, _outputType, l2Metadata.GetMetadata());
             return infos;
         }
 
-        private MetadataUtils.MetadataGetter<VBuffer<DvText>> CreateSlotNamesGetter(string prefix)
+        private ValueGetter<VBuffer<ReadOnlyMemory<char>>> CreateSlotNamesGetter(string prefix)
         {
             return
-                (int col, ref VBuffer<DvText> dst) =>
+                (ref VBuffer<ReadOnlyMemory<char>> dst) =>
                 {
                     var values = dst.Values;
                     if (Utils.Size(values) < _scoreSize)
-                        values = new DvText[_scoreSize];
+                        values = new ReadOnlyMemory<char>[_scoreSize];
                     for (int i = 0; i < _scoreSize; i++)
-                        values[i] = new DvText(string.Format("{0} ({1})", prefix, _quantiles[i]));
-                    dst = new VBuffer<DvText>(_scoreSize, values);
+                        values[i] = string.Format("{0} ({1})", prefix, _quantiles[i]).AsMemory();
+                    dst = new VBuffer<ReadOnlyMemory<char>>(_scoreSize, values);
                 };
         }
 
@@ -421,7 +427,7 @@ namespace Microsoft.ML.Runtime.Data
                     {
                         updateCacheIfNeeded();
                         dst = new VBuffer<Double>(_scoreSize, 0, dst.Values, dst.Indices);
-                        VBufferUtils.ApplyWith(ref l1, ref dst, sqr);
+                        VBufferUtils.ApplyWith(in l1, ref dst, sqr);
                     };
                 getters[L2Col] = l2Fn;
             }
@@ -491,17 +497,9 @@ namespace Microsoft.ML.Runtime.Data
             ch.Info(unweightedMetrics);
         }
 
-        protected override void PrintOverallResultsCore(IChannel ch, string filename, Dictionary<string, IDataView>[] metrics)
+        protected override IDataView GetOverallResultsCore(IDataView overall)
         {
-            ch.AssertNonEmpty(metrics);
-
-            IDataView overall;
-            if (!TryGetOverallMetrics(metrics, out overall))
-                throw ch.Except("No overall metrics found");
-
-            // Show only the metrics for the requested index.
-            overall = ExtractRelevantIndex(overall);
-            MetricWriter.PrintOverallMetrics(Host, ch, filename, overall, metrics.Length);
+            return ExtractRelevantIndex(overall);
         }
 
         private IDataView ExtractRelevantIndex(IDataView data)
@@ -515,7 +513,9 @@ namespace Microsoft.ML.Runtime.Data
                     var name = data.Schema.GetColumnName(i);
                     var index = _index ?? type.VectorSize / 2;
                     output = LambdaColumnMapper.Create(Host, "Quantile Regression", output, name, name, type, NumberType.R8,
-                        (ref VBuffer<Double> src, ref Double dst) => dst = src.GetItemOrDefault(index));
+                        (in VBuffer<Double> src, ref Double dst) => dst = src.GetItemOrDefault(index));
+                    output = new ChooseColumnsByIndexTransform(Host,
+                        new ChooseColumnsByIndexTransform.Arguments() { Drop = true, Index = new[] { i } }, output);
                 }
             }
             return output;
@@ -562,7 +562,7 @@ namespace Microsoft.ML.Runtime.Data
             string name;
             MatchColumns(host, input, out label, out weight, out name);
             var evaluator = new QuantileRegressionMamlEvaluator(host, input);
-            var data = TrainUtils.CreateExamples(input.Data, label, null, null, weight, name);
+            var data = new RoleMappedData(input.Data, label, null, null, weight, name);
             var metrics = evaluator.Evaluate(data);
 
             var warnings = ExtractWarnings(host, metrics);

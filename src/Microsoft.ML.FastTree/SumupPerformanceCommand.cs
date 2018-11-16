@@ -15,14 +15,14 @@ using System.Threading;
 using Microsoft.ML.Runtime;
 using Microsoft.ML.Runtime.Command;
 using Microsoft.ML.Runtime.CommandLine;
-using Microsoft.ML.Runtime.FastTree;
-using Microsoft.ML.Runtime.FastTree.Internal;
+using Microsoft.ML.Trainers.FastTree;
+using Microsoft.ML.Trainers.FastTree.Internal;
 using Microsoft.ML.Runtime.Internal.Utilities;
 
 [assembly: LoadableClass(typeof(SumupPerformanceCommand), typeof(SumupPerformanceCommand.Arguments), typeof(SignatureCommand),
     "", "FastTreeSumupPerformance", "ftsumup")]
 
-namespace Microsoft.ML.Runtime.FastTree
+namespace Microsoft.ML.Trainers.FastTree
 {
     using Stopwatch = System.Diagnostics.Stopwatch;
 
@@ -110,7 +110,7 @@ namespace Microsoft.ML.Runtime.FastTree
         private IEnumerable<int> CreateSparse(IChannel ch, Random rgen)
         {
             ch.CheckUserArg(0 <= _param && _param < 1, nameof(Arguments.Parameter), "For sparse ararys");
-            // The parameter is the level of sparsity. Use the geometric distribution to determine the number of 
+            // The parameter is the level of sparsity. Use the geometric distribution to determine the number of
             // Geometric distribution (with 0 support) would be Math.
             double denom = Math.Log(1 - _param);
             if (double.IsNegativeInfinity(denom))
@@ -326,8 +326,6 @@ namespace Microsoft.ML.Runtime.FastTree
                     ch.Info("Partition {0} ({1} of {2}), completed {3} ({4:0.000} ns per doc)",
                         partition, data.TotalCount, _len, completed, nsPerDoc);
                 }
-
-                ch.Done();
             }
         }
     }

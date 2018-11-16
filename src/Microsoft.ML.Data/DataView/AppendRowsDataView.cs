@@ -24,7 +24,7 @@ namespace Microsoft.ML.Runtime.Data
     /// This class provides the functionality to combine multiple IDataView objects which share the same schema
     /// All sources must contain the same number of columns and their column names, sizes, and item types must match.
     /// The row count of the resulting IDataView will be the sum over that of each individual.
-    /// 
+    ///
     /// An AppendRowsDataView instance is shuffleable iff all of its sources are shuffleable and their row counts are known.
     /// </summary>
     public sealed class AppendRowsDataView : IDataView
@@ -33,28 +33,28 @@ namespace Microsoft.ML.Runtime.Data
 
         private readonly IDataView[] _sources;
         private readonly int[] _counts;
-        private readonly ISchema _schema;
+        private readonly Schema _schema;
         private readonly IHost _host;
         private readonly bool _canShuffle;
 
         public bool CanShuffle { get { return _canShuffle; } }
 
-        public ISchema Schema { get { return _schema; } }
+        public Schema Schema { get { return _schema; } }
 
         // REVIEW: AppendRowsDataView now only checks schema consistency up to column names and types.
         // A future task will be to ensure that the sources are consistent on the metadata level.
 
         /// <summary>
         /// Create a dataview by appending the rows of the sources.
-        /// 
-        /// All sources must be consistent with the passed-in schema in the number of columns, column names, 
+        ///
+        /// All sources must be consistent with the passed-in schema in the number of columns, column names,
         /// and column types. If schema is null, the first source's schema will be used.
         /// </summary>
         /// <param name="env">The host environment.</param>
         /// <param name="schema">The schema for the result. If this is null, the first source's schema will be used.</param>
         /// <param name="sources">The sources to be appended.</param>
         /// <returns>The resulting IDataView.</returns>
-        public static IDataView Create(IHostEnvironment env, ISchema schema, params IDataView[] sources)
+        public static IDataView Create(IHostEnvironment env, Schema schema, params IDataView[] sources)
         {
             Contracts.CheckValue(env, nameof(env));
             env.CheckValue(sources, nameof(sources));
@@ -66,7 +66,7 @@ namespace Microsoft.ML.Runtime.Data
             return new AppendRowsDataView(env, schema, sources);
         }
 
-        private AppendRowsDataView(IHostEnvironment env, ISchema schema, IDataView[] sources)
+        private AppendRowsDataView(IHostEnvironment env, Schema schema, IDataView[] sources)
         {
             Contracts.CheckValue(env, nameof(env));
             _host = env.Register(RegistrationName);
@@ -91,7 +91,7 @@ namespace Microsoft.ML.Runtime.Data
                     _counts = null;
                     break;
                 }
-                long? count = dv.GetRowCount(true);
+                long? count = dv.GetRowCount();
                 if (count == null || count < 0 || count > int.MaxValue)
                 {
                     _canShuffle = false;
@@ -115,8 +115,9 @@ namespace Microsoft.ML.Runtime.Data
 
             for (int c = 0; c < colCount; c++)
             {
-                string name = _schema.GetColumnName(c);
-                ColumnType type = _schema.GetColumnType(c);
+                string name = _schema[c].Name;
+                ColumnType type = _schema[c].Type;
+
                 for (int i = startingSchemaIndex; i < _sources.Length; i++)
                 {
                     ISchema schema = _sources[i].Schema;
@@ -126,12 +127,12 @@ namespace Microsoft.ML.Runtime.Data
             }
         }
 
-        public long? GetRowCount(bool lazy = true)
+        public long? GetRowCount()
         {
             long sum = 0;
             foreach (var source in _sources)
             {
-                var cur = source.GetRowCount(lazy);
+                var cur = source.GetRowCount();
                 if (cur == null)
                     return null;
                 _host.Check(cur.Value >= 0, "One of the sources returned a negative row count");
@@ -165,7 +166,7 @@ namespace Microsoft.ML.Runtime.Data
 
             public override long Batch => 0;
 
-            public ISchema Schema { get; }
+            public Schema Schema { get; }
 
             public CursorBase(AppendRowsDataView parent)
                 : base(parent._host)
@@ -178,7 +179,7 @@ namespace Microsoft.ML.Runtime.Data
 
             protected Delegate CreateGetter(int col)
             {
-                ColumnType colType = Schema.GetColumnType(col);
+                ColumnType colType = Schema[col].Type;
                 Ch.AssertValue(colType);
                 Func<int, Delegate> creator = CreateTypedGetter<int>;
                 var typedCreator = creator.GetMethodInfo().GetGenericMethodDefinition().MakeGenericMethod(colType.RawType);
@@ -190,6 +191,8 @@ namespace Microsoft.ML.Runtime.Data
             public ValueGetter<TValue> GetGetter<TValue>(int col)
             {
                 Ch.Check(IsColumnActive(col), "The column must be active against the defined predicate.");
+                if (!(Getters[col] is ValueGetter<TValue>))
+                    throw Ch.Except($"Invalid TValue in GetGetter: '{typeof(TValue)}'");
                 return Getters[col] as ValueGetter<TValue>;
             }
 
@@ -201,7 +204,7 @@ namespace Microsoft.ML.Runtime.Data
         }
 
         /// <summary>
-        /// The deterministic cursor. It will scan through the sources sequentially. 
+        /// The deterministic cursor. It will scan through the sources sequentially.
         /// </summary>
         private sealed class Cursor : CursorBase
         {
@@ -280,7 +283,6 @@ namespace Microsoft.ML.Runtime.Data
             {
                 if (State != CursorState.Done)
                 {
-                    Ch.Done();
                     Ch.Dispose();
                     if (_currentCursor != null)
                         _currentCursor.Dispose();
@@ -291,7 +293,7 @@ namespace Microsoft.ML.Runtime.Data
 
         /// <summary>
         ///  A RandCursor will ask each subordinate cursor to shuffle itself.
-        /// Then, at each step, it randomly calls a subordinate to move next with probability (roughly) proportional to 
+        /// Then, at each step, it randomly calls a subordinate to move next with probability (roughly) proportional to
         /// the number of the subordinate's remaining rows.
         /// </summary>
         private sealed class RandCursor : CursorBase
@@ -370,7 +372,6 @@ namespace Microsoft.ML.Runtime.Data
             {
                 if (State != CursorState.Done)
                 {
-                    Ch.Done();
                     Ch.Dispose();
                     foreach (IRowCursor c in _cursorSet)
                         c.Dispose();
@@ -381,16 +382,16 @@ namespace Microsoft.ML.Runtime.Data
 
         /// <summary>
         /// Given k classes with counts (N_0, N_2, N_3, ...,  N_{k-1}), the goal of this sampler is to select the i-th
-        /// class with probability N_i/M, where M = N_0 + N_1 + ... + N_{k-1}. 
+        /// class with probability N_i/M, where M = N_0 + N_1 + ... + N_{k-1}.
         /// Once the i-th class is selected, its count will be updated to N_i - 1.
-        /// 
+        ///
         /// For efficiency consideration, the sampling distribution is only an approximation of the desired distribution.
         /// </summary>
         private sealed class MultinomialWithoutReplacementSampler
         {
             // Implementation: generate a batch array of size BatchSize.
             // Each class will claim a fraction of the batch proportional to its remaining row count.
-            // Shuffle the array. The sampler reads from the array one at a time until the batch is consumed. 
+            // Shuffle the array. The sampler reads from the array one at a time until the batch is consumed.
             // The sampler then generates a new batch and repeat the process.
             private const int BatchSize = 1000;
 

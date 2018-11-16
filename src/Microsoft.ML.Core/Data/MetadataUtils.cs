@@ -8,12 +8,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using Microsoft.ML.Core.Data;
 using Microsoft.ML.Runtime.Internal.Utilities;
 
 namespace Microsoft.ML.Runtime.Data
 {
     /// <summary>
-    /// Utilities for implementing and using the metadata API of ISchema.
+    /// Utilities for implementing and using the metadata API of <see cref="Schema"/>.
     /// </summary>
     public static class MetadataUtils
     {
@@ -41,12 +42,13 @@ namespace Microsoft.ML.Runtime.Data
             public const string ScoreColumnSetId = "ScoreColumnSetId";
 
             /// <summary>
-            /// Metadata kind that indicates the prediction kind as a string. E.g. "BinaryClassification". The value is typically a DvText.
+            /// Metadata kind that indicates the prediction kind as a string. For example, "BinaryClassification".
+            /// The value is typically a ReadOnlyMemory&lt;char&gt;.
             /// </summary>
             public const string ScoreColumnKind = "ScoreColumnKind";
 
             /// <summary>
-            /// Metadata kind that indicates the value kind of the score column as a string. E.g. "Score", "PredictedLabel", "Probability". The value is typically a DvText.
+            /// Metadata kind that indicates the value kind of the score column as a string. For example, "Score", "PredictedLabel", "Probability". The value is typically a ReadOnlyMemory.
             /// </summary>
             public const string ScoreValueKind = "ScoreValueKind";
 
@@ -74,9 +76,9 @@ namespace Microsoft.ML.Runtime.Data
 
             /// <summary>
             /// Metadata kind that indicates the ranges within a column that are categorical features.
-            /// The value is a vector type of ints with dimension of two. The first dimension 
+            /// The value is a vector type of ints with dimension of two. The first dimension
             /// represents the number of categorical features and second dimension represents the range
-            /// and is of size two. The range has start and end index(both inclusive) of categorical 
+            /// and is of size two. The range has start and end index(both inclusive) of categorical
             /// slots within that column.
             /// </summary>
             public const string CategoricalSlotRanges = "CategoricalSlotRanges";
@@ -156,7 +158,7 @@ namespace Microsoft.ML.Runtime.Data
         }
 
         /// <summary>
-        /// Returns a vector type with item type int and the given size. 
+        /// Returns a vector type with item type int and the given size.
         /// The range count must be a positive integer.
         /// This is a standard type for metadata consisting of multiple int values that represent
         /// categorical slot ranges with in a column.
@@ -230,7 +232,7 @@ namespace Microsoft.ML.Runtime.Data
         /// The filter function is called for each column, passing in the schema and the column index, and returns
         /// true if the column should be considered, false if the column should be skipped.
         /// </summary>
-        public static uint GetMaxMetadataKind(this ISchema schema, out int colMax, string metadataKind, Func<ISchema, int, bool> filterFunc = null)
+        public static uint GetMaxMetadataKind(this Schema schema, out int colMax, string metadataKind, Func<Schema, int, bool> filterFunc = null)
         {
             uint max = 0;
             colMax = -1;
@@ -256,7 +258,7 @@ namespace Microsoft.ML.Runtime.Data
         /// Returns the set of column ids which match the value of specified metadata kind.
         /// The metadata type should be a KeyType with raw type U4.
         /// </summary>
-        public static IEnumerable<int> GetColumnSet(this ISchema schema, string metadataKind, uint value)
+        public static IEnumerable<int> GetColumnSet(this Schema schema, string metadataKind, uint value)
         {
             for (int col = 0; col < schema.ColumnCount; col++)
             {
@@ -275,16 +277,16 @@ namespace Microsoft.ML.Runtime.Data
         /// Returns the set of column ids which match the value of specified metadata kind.
         /// The metadata type should be of type text.
         /// </summary>
-        public static IEnumerable<int> GetColumnSet(this ISchema schema, string metadataKind, string value)
+        public static IEnumerable<int> GetColumnSet(this Schema schema, string metadataKind, string value)
         {
             for (int col = 0; col < schema.ColumnCount; col++)
             {
                 var columnType = schema.GetMetadataTypeOrNull(metadataKind, col);
                 if (columnType != null && columnType.IsText)
                 {
-                    DvText val = default(DvText);
+                    ReadOnlyMemory<char> val = default;
                     schema.GetMetadata(metadataKind, col, ref val);
-                    if (val.EqualsStr(value))
+                    if (ReadOnlyMemoryUtils.EqualsStr(value, val))
                         yield return col;
                 }
             }
@@ -294,9 +296,9 @@ namespace Microsoft.ML.Runtime.Data
         /// Returns <c>true</c> if the specified column:
         ///  * is a vector of length N (including 0)
         ///  * has a SlotNames metadata
-        ///  * metadata type is VBuffer&lt;DvText&gt; of length N
+        ///  * metadata type is VBuffer&lt;ReadOnlyMemory&lt;char&gt;&gt; of length N
         /// </summary>
-        public static bool HasSlotNames(this ISchema schema, int col, int vectorSize)
+        public static bool HasSlotNames(this Schema schema, int col, int vectorSize)
         {
             if (vectorSize == 0)
                 return false;
@@ -309,20 +311,21 @@ namespace Microsoft.ML.Runtime.Data
                 && type.ItemType.IsText;
         }
 
-        public static void GetSlotNames(RoleMappedSchema schema, RoleMappedSchema.ColumnRole role, int vectorSize, ref VBuffer<DvText> slotNames)
+        public static void GetSlotNames(RoleMappedSchema schema, RoleMappedSchema.ColumnRole role, int vectorSize, ref VBuffer<ReadOnlyMemory<char>> slotNames)
         {
             Contracts.CheckValueOrNull(schema);
-            Contracts.CheckValue(role.Value, nameof(role));
             Contracts.CheckParam(vectorSize >= 0, nameof(vectorSize));
 
             IReadOnlyList<ColumnInfo> list;
             if ((list = schema?.GetColumns(role)) == null || list.Count != 1 || !schema.Schema.HasSlotNames(list[0].Index, vectorSize))
-                slotNames = new VBuffer<DvText>(vectorSize, 0, slotNames.Values, slotNames.Indices);
+            {
+                VBufferUtils.Resize(ref slotNames, vectorSize, 0);
+            }
             else
                 schema.Schema.GetMetadata(Kinds.SlotNames, list[0].Index, ref slotNames);
         }
 
-        public static bool HasKeyNames(this ISchema schema, int col, int keyCount)
+        public static bool HasKeyNames(this Schema schema, int col, int keyCount)
         {
             if (keyCount == 0)
                 return false;
@@ -336,6 +339,53 @@ namespace Microsoft.ML.Runtime.Data
         }
 
         /// <summary>
+        /// Returns whether a column has the <see cref="Kinds.IsNormalized"/> metadata set to true.
+        /// That metadata should be set when the data has undergone transforms that would render it
+        /// "normalized."
+        /// </summary>
+        /// <param name="schema">The schema to query</param>
+        /// <param name="col">Which column in the schema to query</param>
+        /// <returns>True if and only if the column has the <see cref="Kinds.IsNormalized"/> metadata
+        /// set to the scalar value true</returns>
+        public static bool IsNormalized(this Schema schema, int col)
+        {
+            Contracts.CheckValue(schema, nameof(schema));
+            var value = default(bool);
+            return schema.TryGetMetadata(BoolType.Instance, Kinds.IsNormalized, col, ref value) && value;
+        }
+
+        /// <summary>
+        /// Returns whether a column has the <see cref="Kinds.IsNormalized"/> metadata indicated by
+        /// the schema shape.
+        /// </summary>
+        /// <param name="col">The schema shape column to query</param>
+        /// <returns>True if and only if the column has the <see cref="Kinds.IsNormalized"/> metadata
+        /// of a scalar <see cref="BoolType"/> type, which we assume, if set, should be <c>true</c>.</returns>
+        public static bool IsNormalized(this SchemaShape.Column col)
+        {
+            Contracts.CheckValue(col, nameof(col));
+            return col.Metadata.TryFindColumn(Kinds.IsNormalized, out var metaCol)
+                && metaCol.Kind == SchemaShape.Column.VectorKind.Scalar && !metaCol.IsKey
+                && metaCol.ItemType == BoolType.Instance;
+        }
+
+        /// <summary>
+        /// Returns whether a column has the <see cref="Kinds.SlotNames"/> metadata indicated by
+        /// the schema shape.
+        /// </summary>
+        /// <param name="col">The schema shape column to query</param>
+        /// <returns>True if and only if the column is a definite sized vector type, has the
+        /// <see cref="Kinds.SlotNames"/> metadata of definite sized vectors of text.</returns>
+        public static bool HasSlotNames(this SchemaShape.Column col)
+        {
+            Contracts.CheckValue(col, nameof(col));
+            return col.Kind == SchemaShape.Column.VectorKind.Vector
+                && col.Metadata.TryFindColumn(Kinds.SlotNames, out var metaCol)
+                && metaCol.Kind == SchemaShape.Column.VectorKind.Vector && !metaCol.IsKey
+                && metaCol.ItemType == TextType.Instance;
+        }
+
+        /// <summary>
         /// Tries to get the metadata kind of the specified type for a column.
         /// </summary>
         /// <typeparam name="T">The raw type of the metadata, should match the PrimitiveType type</typeparam>
@@ -345,8 +395,11 @@ namespace Microsoft.ML.Runtime.Data
         /// <param name="col">The column</param>
         /// <param name="value">The value to return, if successful</param>
         /// <returns>True if the metadata of the right type exists, false otherwise</returns>
-        public static bool TryGetMetadata<T>(this ISchema schema, PrimitiveType type, string kind, int col, ref T value)
+        public static bool TryGetMetadata<T>(this Schema schema, PrimitiveType type, string kind, int col, ref T value)
         {
+            Contracts.CheckValue(schema, nameof(schema));
+            Contracts.CheckValue(type, nameof(type));
+
             var metadataType = schema.GetMetadataTypeOrNull(kind, col);
             if (!type.Equals(metadataType))
                 return false;
@@ -357,64 +410,80 @@ namespace Microsoft.ML.Runtime.Data
         /// <summary>
         /// Return whether the given column index is hidden in the given schema.
         /// </summary>
-        public static bool IsHidden(this ISchema schema, int col)
+        public static bool IsHidden(this Schema schema, int col)
         {
             Contracts.CheckValue(schema, nameof(schema));
             string name = schema.GetColumnName(col);
             int top;
             bool tmp = schema.TryGetColumnIndex(name, out top);
-            Contracts.Assert(tmp, "Why did TryGetColumnIndex return false?");
+            Contracts.Assert(tmp); // This would only be false if the implementation of schema were buggy.
             return !tmp || top != col;
         }
 
         /// <summary>
-        /// The categoricalFeatures is a vector of the indices of categorical features slots. 
+        /// The categoricalFeatures is a vector of the indices of categorical features slots.
         /// This vector should always have an even number of elements, and the elements should be parsed in groups of two consecutive numbers.
         /// So if its value is the range of numbers: 0,2,3,4,8,9
         /// look at it as [0,2],[3,4],[8,9].
         /// The way to interpret that is: feature with indices 0, 1, and 2 are one categorical
-        /// Features with indices 3 and 4 are another categorical. Features 5 and 6 don't appear there, so they are not categoricals. 
+        /// Features with indices 3 and 4 are another categorical. Features 5 and 6 don't appear there, so they are not categoricals.
         /// </summary>
-        public static bool TryGetCategoricalFeatureIndices(ISchema schema, int colIndex, out int[] categoricalFeatures)
+        public static bool TryGetCategoricalFeatureIndices(Schema schema, int colIndex, out int[] categoricalFeatures)
         {
             Contracts.CheckValue(schema, nameof(schema));
             Contracts.Check(colIndex >= 0, nameof(colIndex));
 
             bool isValid = false;
             categoricalFeatures = null;
-            if (!schema.GetColumnType(colIndex).IsKnownSizeVector)
+            if (!(schema.GetColumnType(colIndex) is VectorType vecType && vecType.Size > 0))
                 return isValid;
 
             var type = schema.GetMetadataTypeOrNull(MetadataUtils.Kinds.CategoricalSlotRanges, colIndex);
-            if (type?.RawType == typeof(VBuffer<DvInt4>))
+            if (type?.RawType == typeof(VBuffer<int>))
             {
-                VBuffer<DvInt4> catIndices = default(VBuffer<DvInt4>);
+                VBuffer<int> catIndices = default(VBuffer<int>);
                 schema.GetMetadata(MetadataUtils.Kinds.CategoricalSlotRanges, colIndex, ref catIndices);
                 VBufferUtils.Densify(ref catIndices);
-                int columnSlotsCount = schema.GetColumnType(colIndex).AsVector.VectorSizeCore;
+                int columnSlotsCount = vecType.Size;
                 if (catIndices.Length > 0 && catIndices.Length % 2 == 0 && catIndices.Length <= columnSlotsCount * 2)
                 {
                     int previousEndIndex = -1;
                     isValid = true;
-                    for (int i = 0; i < catIndices.Values.Length; i += 2)
+                    var catIndicesValues = catIndices.GetValues();
+                    for (int i = 0; i < catIndicesValues.Length; i += 2)
                     {
-                        if (catIndices.Values[i].RawValue > catIndices.Values[i + 1].RawValue ||
-                            catIndices.Values[i].RawValue <= previousEndIndex ||
-                            catIndices.Values[i].RawValue >= columnSlotsCount ||
-                            catIndices.Values[i + 1].RawValue >= columnSlotsCount)
+                        if (catIndicesValues[i] > catIndicesValues[i + 1] ||
+                            catIndicesValues[i] <= previousEndIndex ||
+                            catIndicesValues[i] >= columnSlotsCount ||
+                            catIndicesValues[i + 1] >= columnSlotsCount)
                         {
                             isValid = false;
                             break;
                         }
 
-                        previousEndIndex = catIndices.Values[i + 1].RawValue;
+                        previousEndIndex = catIndicesValues[i + 1];
                     }
                     if (isValid)
-                        categoricalFeatures = catIndices.Values.Select(val => val.RawValue).ToArray();
+                        categoricalFeatures = catIndicesValues.ToArray();
                 }
             }
 
             return isValid;
+        }
+
+        /// <summary>
+        /// Produces sequence of columns that are generated by trainer estimators.
+        /// </summary>
+        /// <param name="isNormalized">whether we should also append 'IsNormalized' (typically for probability column)</param>
+        public static IEnumerable<SchemaShape.Column> GetTrainerOutputMetadata(bool isNormalized = false)
+        {
+            var cols = new List<SchemaShape.Column>();
+            cols.Add(new SchemaShape.Column(Kinds.ScoreColumnSetId, SchemaShape.Column.VectorKind.Scalar, NumberType.U4, true));
+            cols.Add(new SchemaShape.Column(Kinds.ScoreColumnKind, SchemaShape.Column.VectorKind.Scalar, TextType.Instance, false));
+            cols.Add(new SchemaShape.Column(Kinds.ScoreValueKind, SchemaShape.Column.VectorKind.Scalar, TextType.Instance, false));
+            if (isNormalized)
+                cols.Add(new SchemaShape.Column(Kinds.IsNormalized, SchemaShape.Column.VectorKind.Scalar, BoolType.Instance, false));
+            return cols;
         }
     }
 }

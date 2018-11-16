@@ -7,12 +7,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 
-using Microsoft.ML;
 using Microsoft.ML.Runtime;
 using Microsoft.ML.Runtime.CommandLine;
-using Microsoft.ML.Runtime.Internal.Utilities;
 using Microsoft.ML.Runtime.Sweeper;
-using Microsoft.ML.Runtime.Internal.Internallearn;
 
 [assembly: LoadableClass(typeof(SynthConfigRunner), typeof(SynthConfigRunner.Arguments), typeof(SignatureConfigRunner),
     "", "Synth")]
@@ -20,7 +17,7 @@ using Microsoft.ML.Runtime.Internal.Internallearn;
 namespace Microsoft.ML.Runtime.Sweeper
 {
     /// <summary>
-    /// This class gives a simple way of running optimization experiments on synthetic functions, rather than on actual learning problems. 
+    /// This class gives a simple way of running optimization experiments on synthetic functions, rather than on actual learning problems.
     /// It was initially created to test the sweeper methods on the Rastrigin function.
     /// </summary>
     public sealed class SynthConfigRunner : ExeConfigRunnerBase

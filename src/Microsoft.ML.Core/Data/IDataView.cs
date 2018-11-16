@@ -4,21 +4,19 @@
 
 using System;
 using System.Collections.Generic;
-using Microsoft.ML.Runtime.Internal.Utilities;
 
 namespace Microsoft.ML.Runtime.Data
 {
     /// <summary>
-    /// Interface for schema information.
+    /// Legacy interface for schema information.
+    /// Please avoid implementing this interface, use <see cref="Schema"/>.
     /// </summary>
     public interface ISchema
     {
         /// <summary>
         /// Number of columns.
         /// </summary>
-        int ColumnCount {
-            get;
-        }
+        int ColumnCount { get; }
 
         /// <summary>
         /// If there is a column with the given name, set col to its index and return true.
@@ -69,7 +67,7 @@ namespace Microsoft.ML.Runtime.Data
         /// <summary>
         /// Gets an instance of Schema.
         /// </summary>
-        ISchema Schema { get; }
+        Schema Schema { get; }
     }
 
     /// <summary>
@@ -84,17 +82,15 @@ namespace Microsoft.ML.Runtime.Data
         bool CanShuffle { get; }
 
         /// <summary>
-        /// Returns the number of rows if known. Null means unknown. If lazy is true, then
-        /// this is permitted to return null when it might return a non-null value on a subsequent
-        /// call. This indicates, that the transform does not YET know the number of rows, but
-        /// may in the future. If lazy is false, then this is permitted to do some work (no more
-        /// that it would normally do for cursoring) to determine the number of rows.
-        /// 
-        /// Most components will return the same answer whether lazy is true or false. Some, like
-        /// a cache, might return null until the cache is fully populated (when lazy is true). When
-        /// lazy is false, such a cache would block until the cache was populated.
+        /// Returns the number of rows if known. Returning null means that the row count is unknown but
+        /// it might return a non-null value on a subsequent call. This indicates, that the transform does
+        /// not YET know the number of rows, but may in the future. Its implementation's computation
+        /// complexity should be O(1).
+        ///
+        /// Most implementation will return the same answer every time. Some, like a cache, might
+        /// return null until the cache is fully populated.
         /// </summary>
-        long? GetRowCount(bool lazy = true);
+        long? GetRowCount();
 
         /// <summary>
         /// Get a row cursor. The active column indices are those for which needCol(col) returns true.
@@ -110,7 +106,7 @@ namespace Microsoft.ML.Runtime.Data
         /// has no recommendation, and the implementation should have some default behavior to cover
         /// this case. Note that this is strictly a recommendation: it is entirely possible that
         /// an implementation can return a different number of cursors.
-        /// 
+        ///
         /// The cursors should return the same data as returned through
         /// <see cref="GetRowCursor(Func{int, bool}, IRandom)"/>, except partitioned: no two cursors
         /// should return the "same" row as would have been returned through the regular serial cursor,
@@ -161,8 +157,7 @@ namespace Microsoft.ML.Runtime.Data
         /// <summary>
         /// Returns a value getter delegate to fetch the given column value from the row.
         /// This throws if the column is not active in this row, or if the type
-        /// <typeparamref name="TValue"/> differs from this row's schema's
-        /// <see cref="ISchema.GetColumnType(int)"/> on <paramref name="col"/>.
+        /// <typeparamref name="TValue"/> differs from this column's type.
         /// </summary>
         ValueGetter<TValue> GetGetter<TValue>(int col);
     }

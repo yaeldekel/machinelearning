@@ -19,7 +19,7 @@ using Newtonsoft.Json.Linq;
 
 namespace Microsoft.ML.Runtime.Model.Pfa
 {
-    public sealed class SavePfaCommand : DataCommand.ImplBase<SavePfaCommand.Arguments>
+    internal sealed class SavePfaCommand : DataCommand.ImplBase<SavePfaCommand.Arguments>
     {
         public const string Summary = "Given a data model, write out the corresponding PFA.";
         public const string LoadName = "SavePfa";
@@ -94,7 +94,6 @@ namespace Microsoft.ML.Runtime.Model.Pfa
             using (var ch = Host.Start("Run"))
             {
                 Run(ch);
-                ch.Done();
             }
         }
 
@@ -147,13 +146,13 @@ namespace Microsoft.ML.Runtime.Model.Pfa
             {
                 RoleMappedData data;
                 if (trainSchema != null)
-                    data = RoleMappedData.Create(end, trainSchema.GetColumnRoleNames());
+                    data = new RoleMappedData(end, trainSchema.GetColumnRoleNames());
                 else
                 {
                     // We had a predictor, but no roles stored in the model. Just suppose
                     // default column names are OK, if present.
-                    data = TrainUtils.CreateExamplesOpt(end, DefaultColumnNames.Label,
-                        DefaultColumnNames.Features, DefaultColumnNames.GroupId, DefaultColumnNames.Weight, DefaultColumnNames.Name);
+                    data = new RoleMappedData(end, DefaultColumnNames.Label,
+                        DefaultColumnNames.Features, DefaultColumnNames.GroupId, DefaultColumnNames.Weight, DefaultColumnNames.Name, opt: true);
                 }
 
                 var scorePipe = ScoreUtils.GetScorer(rawPred, data, Host, trainSchema);

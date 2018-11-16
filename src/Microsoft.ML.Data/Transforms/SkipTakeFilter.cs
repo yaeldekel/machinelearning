@@ -2,13 +2,14 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System;
 using Microsoft.ML.Runtime;
 using Microsoft.ML.Runtime.CommandLine;
 using Microsoft.ML.Runtime.Data;
 using Microsoft.ML.Runtime.EntryPoints;
 using Microsoft.ML.Runtime.Internal.Utilities;
 using Microsoft.ML.Runtime.Model;
+using Microsoft.ML.Transforms;
+using System;
 
 [assembly: LoadableClass(SkipTakeFilter.SkipTakeFilterSummary, typeof(SkipTakeFilter), typeof(SkipTakeFilter.Arguments), typeof(SignatureDataTransform),
     SkipTakeFilter.SkipTakeFilterUserName, "SkipTakeFilter", SkipTakeFilter.SkipTakeFilterShortName)]
@@ -22,7 +23,7 @@ using Microsoft.ML.Runtime.Model;
 [assembly: LoadableClass(SkipTakeFilter.SkipTakeFilterSummary, typeof(SkipTakeFilter), null, typeof(SignatureLoadDataTransform),
     "Skip and Take Filter", SkipTakeFilter.LoaderSignature)]
 
-namespace Microsoft.ML.Runtime.Data
+namespace Microsoft.ML.Transforms
 {
     /// <summary>
     /// Allows limiting input to a subset of row at an optional offset.  Can be used to implement data paging.
@@ -60,13 +61,13 @@ namespace Microsoft.ML.Runtime.Data
         public sealed class TakeArguments : TransformInputBase
         {
             [Argument(ArgumentType.Required, HelpText = Arguments.TakeHelp, ShortName = "c,n,t", SortOrder = 1)]
-            public long Count = long.MaxValue;
+            public long Count = Arguments.DefaultTake;
         }
 
         public sealed class SkipArguments : TransformInputBase
         {
             [Argument(ArgumentType.Required, HelpText = Arguments.SkipHelp, ShortName = "c,n,s", SortOrder = 1)]
-            public long Count = 0;
+            public long Count = Arguments.DefaultSkip;
         }
 
         private static VersionInfo GetVersionInfo()
@@ -76,7 +77,8 @@ namespace Microsoft.ML.Runtime.Data
                 verWrittenCur: 0x00010001,          // initial
                 verReadableCur: 0x00010001,
                 verWeCanReadBack: 0x00010001,
-                loaderSignature: LoaderSignature);
+                loaderSignature: LoaderSignature,
+                loaderAssemblyName: typeof(SkipTakeFilter).Assembly.FullName);
         }
 
         private readonly long _skip;
@@ -164,14 +166,14 @@ namespace Microsoft.ML.Runtime.Data
         public override bool CanShuffle { get { return false; } }
 
         /// <summary>
-        /// Returns the computed count of rows remaining after skip and take operation.  
+        /// Returns the computed count of rows remaining after skip and take operation.
         /// Returns null if count is unknown.
         /// </summary>
-        public override long? GetRowCount(bool lazy = true)
+        public override long? GetRowCount()
         {
             if (_take == 0)
                 return 0;
-            long? count = Source.GetRowCount(lazy);
+            long? count = Source.GetRowCount();
             if (count == null)
                 return null;
 
@@ -216,7 +218,7 @@ namespace Microsoft.ML.Runtime.Data
                 get { return 0; }
             }
 
-            public RowCursor(IChannelProvider provider, IRowCursor input, ISchema schema, bool[] active, long skip, long take)
+            public RowCursor(IChannelProvider provider, IRowCursor input, Schema schema, bool[] active, long skip, long take)
                 : base(provider, input, schema, active)
             {
                 Ch.Assert(skip >= 0);
@@ -269,5 +271,31 @@ namespace Microsoft.ML.Runtime.Data
                 return Root.MoveMany(count);
             }
         }
+    }
+
+    public static class SkipFilter
+    {
+        /// <summary>
+        /// A helper method to create <see cref="SkipTakeFilter"/> transform for skipping the number of rows defined by the <paramref name="count"/> parameter.
+        /// <see cref="SkipTakeFilter"/> when created with <see cref="SkipTakeFilter.SkipArguments"/> behaves as 'SkipFilter'.
+        /// </summary>
+        /// <param name="env">Host Environment.</param>
+        /// <param name="input">>Input <see cref="IDataView"/>. This is the output from previous transform or loader.</param>
+        /// <param name="count">Number of rows to skip</param>
+        public static IDataTransform Create(IHostEnvironment env, IDataView input, long count = SkipTakeFilter.Arguments.DefaultSkip)
+            => SkipTakeFilter.Create(env, new SkipTakeFilter.SkipArguments() { Count = count }, input);
+    }
+
+    public static class TakeFilter
+    {
+        /// <summary>
+        /// A helper method to create <see cref="SkipTakeFilter"/> transform by taking the top rows defined by the <paramref name="count"/> parameter.
+        /// <see cref="SkipTakeFilter"/> when created with <see cref="SkipTakeFilter.TakeArguments"/> behaves as 'TakeFilter'.
+        /// </summary>
+        /// <param name="env">Host Environment.</param>
+        /// <param name="input">>Input <see cref="IDataView"/>. This is the output from previous transform or loader.</param>
+        /// <param name="count">Number of rows to take</param>
+        public static IDataTransform Create(IHostEnvironment env, IDataView input, long count = SkipTakeFilter.Arguments.DefaultTake)
+            => SkipTakeFilter.Create(env, new SkipTakeFilter.TakeArguments() { Count = count }, input);
     }
 }

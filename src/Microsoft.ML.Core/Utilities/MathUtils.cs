@@ -13,7 +13,8 @@ namespace Microsoft.ML.Runtime.Internal.Utilities
     /// <summary>
     /// Some useful math methods.
     /// </summary>
-    public static class MathUtils
+    [BestFriend]
+    internal static class MathUtils
     {
         public static Float ToFloat(this Double dbl)
         {
@@ -132,40 +133,23 @@ namespace Microsoft.ML.Runtime.Internal.Utilities
         }
 
         /// <summary>
-        /// Finds the first index of the max element of the array.
-        /// NaNs are ignored. If all the elements to consider are NaNs, -1 is 
+        /// Finds the first index of the max element of the span.
+        /// NaNs are ignored. If all the elements to consider are NaNs, -1 is
         /// returned. The caller should distinguish in this case between two
         /// possibilities:
         /// 1) The number of the element to consider is zero.
         /// 2) All the elements to consider are NaNs.
         /// </summary>
-        /// <param name="a">an array</param>
+        /// <param name="a">The span of floats.</param>
         /// <returns>the first index of the max element</returns>
-        public static int ArgMax(Float[] a)
+        public static int ArgMax(ReadOnlySpan<Float> a)
         {
-            return ArgMax(a, Utils.Size(a));
-        }
-
-        /// <summary>
-        /// Finds the first index of the max element of the array. 
-        /// NaNs are ignored. If all the elements to consider are NaNs, -1 is 
-        /// returned. The caller should distinguish in this case between two
-        /// possibilities:
-        /// 1) The number of the element to consider is zero.
-        /// 2) All the elements to consider are NaNs.
-        /// </summary>
-        /// <param name="a">an array</param>
-        /// <param name="count">number of the element in the array to consider</param>
-        /// <returns>the first index of the max element</returns>
-        public static int ArgMax(Float[] a, int count)
-        {
-            Contracts.Assert(0 <= count && count <= Utils.Size(a));
-            if (count == 0)
+            if (a.IsEmpty)
                 return -1;
 
             int amax = -1;
             Float max = Float.NegativeInfinity;
-            for (int i = count - 1; i >= 0; i--)
+            for (int i = a.Length - 1; i >= 0; i--)
             {
                 if (max <= a[i])
                 {
@@ -178,40 +162,23 @@ namespace Microsoft.ML.Runtime.Internal.Utilities
         }
 
         /// <summary>
-        /// Finds the first index of the minimum element of the array.
-        /// NaNs are ignored. If all the elements to consider are NaNs, -1 is 
+        /// Finds the first index of the minimum element of the span.
+        /// NaNs are ignored. If all the elements to consider are NaNs, -1 is
         /// returned. The caller should distinguish in this case between two
         /// possibilities:
         /// 1) The number of the element to consider is zero.
         /// 2) All the elements to consider are NaNs.
         /// </summary>
-        /// <param name="a">an array</param>
+        /// <param name="a">The span of floats.</param>
         /// <returns>the first index of the minimum element</returns>
-        public static int ArgMin(Float[] a)
+        public static int ArgMin(ReadOnlySpan<Float> a)
         {
-            return ArgMin(a, Utils.Size(a));
-        }
-
-        /// <summary>
-        /// Finds the first index of the minimum element of the array.
-        /// NaNs are ignored. If all the elements to consider are NaNs, -1 is 
-        /// returned. The caller should distinguish in this case between two
-        /// possibilities:
-        /// 1) The number of the element to consider is zero.
-        /// 2) All the elements to consider are NaNs.
-        /// </summary>
-        /// <param name="a">an array</param>
-        /// <param name="count">number of the element in the array to consider</param>
-        /// <returns>the first index of the minimum element</returns>
-        public static int ArgMin(Float[] a, int count)
-        {
-            Contracts.Assert(0 <= count && count <= Utils.Size(a));
-            if (count == 0)
+            if (a.IsEmpty)
                 return -1;
 
             int amin = -1;
             Float min = Float.PositiveInfinity;
-            for (int i = count - 1; i >= 0; i--)
+            for (int i = a.Length - 1; i >= 0; i--)
             {
                 if (min >= a[i])
                 {
@@ -257,10 +224,6 @@ namespace Microsoft.ML.Runtime.Internal.Utilities
 
             if (count == 1)
                 return max;
-
-            //else if (leng == 2) {
-            //  return SoftMax(inputs[0], inputs[1]);
-            //}
 
             double intermediate = 0.0;
             Float cutoff = max - LogTolerance;
@@ -335,9 +298,9 @@ namespace Microsoft.ML.Runtime.Internal.Utilities
             return (absDiff / maxAbs) <= maxRelErr;
         }
 
-        private readonly static int[] _possiblePrimeMod30 = new int[] { 1, 7, 11, 13, 17, 19, 23, 29 };
-        private readonly static double _constantForLogGamma = 0.5 * Math.Log(2 * Math.PI);
-        private readonly static double[] _coeffsForLogGamma = { 12.0, -360.0, 1260.0, -1680.0, 1188.0 };
+        private static readonly int[] _possiblePrimeMod30 = new int[] { 1, 7, 11, 13, 17, 19, 23, 29 };
+        private static readonly double _constantForLogGamma = 0.5 * Math.Log(2 * Math.PI);
+        private static readonly double[] _coeffsForLogGamma = { 12.0, -360.0, 1260.0, -1680.0, 1188.0 };
 
         /// <summary>
         /// Returns the log of the gamma function, using the Stirling approximation
@@ -853,7 +816,7 @@ namespace Microsoft.ML.Runtime.Internal.Utilities
         }
 
         /// <summary>
-        /// Math.Sin returns the input value for inputs with large magnitude. We return NaN instead, for consistency 
+        /// Math.Sin returns the input value for inputs with large magnitude. We return NaN instead, for consistency
         /// with Math.Sin(infinity).
         /// </summary>
         public static double Sin(double a)
@@ -863,13 +826,24 @@ namespace Microsoft.ML.Runtime.Internal.Utilities
         }
 
         /// <summary>
-        /// Math.Cos returns the input value for inputs with large magnitude. We return NaN instead, for consistency 
+        /// Math.Cos returns the input value for inputs with large magnitude. We return NaN instead, for consistency
         /// with Math.Cos(infinity).
         /// </summary>
         public static double Cos(double a)
         {
             var res = Math.Cos(a);
             return Math.Abs(res) > 1 ? double.NaN : res;
+        }
+
+        /// <summary>
+        /// Returns the smallest integral value that is greater than or equal to the result of the division.
+        /// </summary>
+        /// <param name="numerator">Number to be divided.</param>
+        /// <param name="denomenator">Number with which to divide the numerator.</param>
+        /// <returns></returns>
+        public static long DivisionCeiling(long numerator, long denomenator)
+        {
+            return (checked(numerator + denomenator) - 1) / denomenator;
         }
     }
 }

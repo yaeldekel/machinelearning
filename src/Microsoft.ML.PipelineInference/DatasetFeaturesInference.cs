@@ -14,26 +14,26 @@ using Newtonsoft.Json;
 namespace Microsoft.ML.Runtime.PipelineInference
 {
     /// <summary>
-    /// Featurization ideas inspired from: 
-    /// http://aad.informatik.uni-freiburg.de/papers/15-NIPS-auto-sklearn-supplementary.pdf
+    /// Featurization ideas inspired from:
+    /// https://ml.informatik.uni-freiburg.de/papers/15-NIPS-auto-sklearn-supplementary.pdf
     /// </summary>
     public static class DatasetFeatureInference
     {
         public sealed class Stats
         {
-            [JsonIgnore] public SummaryStatistics Statistics;
+            [JsonIgnore] private SummaryStatistics _statistics;
 
             [JsonIgnore] public double Sum;
 
             public Stats()
             {
-                Statistics = new SummaryStatistics();
+                _statistics = new SummaryStatistics();
             }
 
             public void Add(double x)
             {
                 Sum += x;
-                Statistics.Add(x);
+                _statistics.Add(x);
             }
 
             public void Add(IEnumerable<int> x)
@@ -43,31 +43,31 @@ namespace Microsoft.ML.Runtime.PipelineInference
             }
 
             [JsonProperty]
-            public long Count => Statistics.RawCount;
+            public long Count => _statistics.RawCount;
 
             [JsonProperty]
-            public double? NonZeroValueCount => Statistics.RawCount > 20 ? (double?)Statistics.Nonzero : null;
+            public double? NonZeroValueCount => _statistics.RawCount > 20 ? (double?)_statistics.Nonzero : null;
 
             [JsonProperty]
-            public double? Variance => Statistics.RawCount > 20 ? (double?)Statistics.SampleVariance : null;
+            public double? Variance => _statistics.RawCount > 20 ? (double?)_statistics.SampleVariance : null;
 
             [JsonProperty]
-            public double? StandardDeviation => Statistics.RawCount > 20 ? (double?)Statistics.SampleStdDev : null;
+            public double? StandardDeviation => _statistics.RawCount > 20 ? (double?)_statistics.SampleStdDev : null;
 
             [JsonProperty]
-            public double? Skewness => Statistics.RawCount > 20 ? (double?)Statistics.Skewness : null;
+            public double? Skewness => _statistics.RawCount > 20 ? (double?)_statistics.Skewness : null;
 
             [JsonProperty]
-            public double? Kurtosis => Statistics.RawCount > 20 ? (double?)Statistics.Kurtosis : null;
+            public double? Kurtosis => _statistics.RawCount > 20 ? (double?)_statistics.Kurtosis : null;
 
             [JsonProperty]
-            public double? Mean => Statistics.RawCount > 20 ? (double?)Statistics.Mean : null;
+            public double? Mean => _statistics.RawCount > 20 ? (double?)_statistics.Mean : null;
 
             [JsonIgnore]
-            public double Min => Statistics.Min;
+            public double Min => _statistics.Min;
 
             [JsonIgnore]
-            public double Max => Statistics.Max;
+            public double Max => _statistics.Max;
         }
 
         public sealed class Column
@@ -110,14 +110,14 @@ namespace Microsoft.ML.Runtime.PipelineInference
 
         public sealed class Arguments
         {
-            public readonly DvText[][] Data;
+            public readonly ReadOnlyMemory<char>[][] Data;
             public readonly Column[] Columns;
             public readonly long? ApproximateRowCount;
             public readonly long? FullFileSize;
             public readonly bool InferencedSchema;
             public readonly Guid Id;
             public readonly bool PrettyPrint;
-            public Arguments(DvText[][] data, Column[] columns, long? fullFileSize,
+            public Arguments(ReadOnlyMemory<char>[][] data, Column[] columns, long? fullFileSize,
                 long? approximateRowCount, bool inferencedSchema, Guid id, bool prettyPrint = false)
             {
                 Data = data;
@@ -132,7 +132,7 @@ namespace Microsoft.ML.Runtime.PipelineInference
 
         private interface ITypeInferenceExpert
         {
-            void Apply(DvText[][] data, Column[] columns);
+            void Apply(ReadOnlyMemory<char>[][] data, Column[] columns);
             bool AddMe();
             string FeatureName();
         }
@@ -175,7 +175,7 @@ namespace Microsoft.ML.Runtime.PipelineInference
 
             public string FeatureName() => nameof(ColumnSchema);
 
-            public void Apply(DvText[][] data, Column[] columns)
+            public void Apply(ReadOnlyMemory<char>[][] data, Column[] columns)
             {
                 Columns = columns;
                 foreach (var column in columns)
@@ -245,7 +245,7 @@ namespace Microsoft.ML.Runtime.PipelineInference
                 LabelFeature = new List<LabelColumnFeature>();
             }
 
-            private void ApplyCore(DvText[][] data, Column column)
+            private void ApplyCore(ReadOnlyMemory<char>[][] data, Column column)
             {
                 _containsLabelColumns = true;
                 Dictionary<string, int> histogram = new Dictionary<string, int>();
@@ -260,12 +260,6 @@ namespace Microsoft.ML.Runtime.PipelineInference
                             break;
 
                         Contracts.Check(data[index].Length > i);
-
-                        if (data[index][i].IsNA)
-                        {
-                            missingValues++;
-                            continue;
-                        }
 
                         label += data[index][i].ToString();
                     }
@@ -288,7 +282,7 @@ namespace Microsoft.ML.Runtime.PipelineInference
                 });
             }
 
-            public void Apply(DvText[][] data, Column[] columns)
+            public void Apply(ReadOnlyMemory<char>[][] data, Column[] columns)
             {
                 foreach (var column in columns.Where(col => col.ColumnPurpose == ColumnPurpose.Label))
                     ApplyCore(data, column);
@@ -311,7 +305,7 @@ namespace Microsoft.ML.Runtime.PipelineInference
             public int NumberOfFeaturesWithMissingValues;
             public double PercentageOfFeaturesWithMissingValues;
 
-            public void Apply(DvText[][] data, Column[] columns)
+            public void Apply(ReadOnlyMemory<char>[][] data, Column[] columns)
             {
                 if (data.GetLength(0) == 0)
                     return;
@@ -331,16 +325,6 @@ namespace Microsoft.ML.Runtime.PipelineInference
                                 break;
 
                             Contracts.Check(data[index].Length > i);
-
-                            if (data[index][i].IsNA)
-                            {
-                                NumberOfMissingValues++;
-                                instanceWithMissingValue = true;
-                                if (column.ColumnPurpose == ColumnPurpose.TextFeature ||
-                                    column.ColumnPurpose == ColumnPurpose.NumericFeature ||
-                                    column.ColumnPurpose == ColumnPurpose.CategoricalFeature)
-                                    featuresWithMissingValues.Set(index, true);
-                            }
                         }
                     }
 
@@ -388,7 +372,7 @@ namespace Microsoft.ML.Runtime.PipelineInference
                 StatsPerColumnPurposeWithSpaces = new Dictionary<string, Stats>();
             }
 
-            private void ApplyCore(DvText[][] data, Column column)
+            private void ApplyCore(ReadOnlyMemory<char>[][] data, Column column)
             {
                 bool numericColumn = CmdParser.IsNumericType(column.Kind?.ToType());
                 //Statistics for numeric column or length of the text in the case of non-numeric column.
@@ -401,11 +385,8 @@ namespace Microsoft.ML.Runtime.PipelineInference
                     if (index >= data.GetLength(0))
                         break;
 
-                    foreach (DvText value in data[index])
+                    foreach (ReadOnlyMemory<char> value in data[index])
                     {
-                        if (value.IsNA)
-                            continue;
-
                         string columnPurposeString = column.Purpose;
                         Stats statsPerPurpose;
                         Stats statsPerPurposeSpaces;
@@ -447,12 +428,12 @@ namespace Microsoft.ML.Runtime.PipelineInference
                     NumericColumnFeatures.Add(new ColumnStatistics { Column = column, Stats = stats });
                 else
                 {
-                    NonNumericColumnLengthFeature.Push(new ColumnStatistics { Column = column, Stats = stats });
-                    NonNumericColumnSpacesFeature.Push(new ColumnStatistics { Column = column, Stats = spacesStats });
+                    NonNumericColumnLengthFeature.Add(new ColumnStatistics { Column = column, Stats = stats });
+                    NonNumericColumnSpacesFeature.Add(new ColumnStatistics { Column = column, Stats = spacesStats });
                 }
             }
 
-            public void Apply(DvText[][] data, Column[] columns)
+            public void Apply(ReadOnlyMemory<char>[][] data, Column[] columns)
             {
                 foreach (var column in columns)
                     ApplyCore(data, column);
@@ -507,11 +488,9 @@ namespace Microsoft.ML.Runtime.PipelineInference
                 }
 
                 if (args.PrettyPrint)
-                    jsonString = JsonConvert.SerializeObject(features, Formatting.Indented);
+                    jsonString = JsonConvert.SerializeObject(features, Newtonsoft.Json.Formatting.Indented);
                 else
                     jsonString = JsonConvert.SerializeObject(features);
-
-                ch.Done();
             }
 
             return jsonString;

@@ -13,7 +13,7 @@ namespace Microsoft.ML.Runtime.Internal.CpuMath
     /// To pin and force alignment, call the GetPin method, typically wrapped in a using (since it
     /// returns a Pin struct that is IDisposable). From the pin, you can get the IntPtr to pass to
     /// native code.
-    /// 
+    ///
     /// The ctor takes an alignment value, which must be a power of two at least sizeof(Float).
     /// </summary>
     public sealed class AlignedArray
@@ -146,7 +146,7 @@ namespace Microsoft.ML.Runtime.Internal.CpuMath
         // valuesSrc contains only the non-zero entries. Those are copied into their logical positions in the dense array.
         // rgposSrc contains the logical positions + offset of the non-zero entries in the dense array.
         // rgposSrc runs parallel to the valuesSrc array.
-        public void CopyFrom(int[] rgposSrc, Float[] valuesSrc, int posMin, int iposMin, int iposLim, bool zeroItems)
+        public void CopyFrom(ReadOnlySpan<int> rgposSrc, ReadOnlySpan<Float> valuesSrc, int posMin, int iposMin, int iposLim, bool zeroItems)
         {
             Contracts.Assert(rgposSrc != null);
             Contracts.Assert(valuesSrc != null);

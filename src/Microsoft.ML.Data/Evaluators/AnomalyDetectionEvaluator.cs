@@ -2,15 +2,16 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using Microsoft.ML.Runtime;
 using Microsoft.ML.Runtime.CommandLine;
 using Microsoft.ML.Runtime.Data;
 using Microsoft.ML.Runtime.EntryPoints;
 using Microsoft.ML.Runtime.Internal.Utilities;
+using Microsoft.ML.Transforms;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
 
 [assembly: LoadableClass(typeof(AnomalyDetectionEvaluator), typeof(AnomalyDetectionEvaluator), typeof(AnomalyDetectionEvaluator.Arguments), typeof(SignatureEvaluator),
     "Anomaly Detection Evaluator", AnomalyDetectionEvaluator.LoadName, "AnomalyDetection", "Anomaly")]
@@ -20,8 +21,6 @@ using Microsoft.ML.Runtime.Internal.Utilities;
 
 namespace Microsoft.ML.Runtime.Data
 {
-    using Float = System.Single;
-
     public sealed class AnomalyDetectionEvaluator : EvaluatorBase<AnomalyDetectionEvaluator.Aggregator>
     {
         public sealed class Arguments
@@ -57,7 +56,7 @@ namespace Microsoft.ML.Runtime.Data
         }
 
         /// <summary>
-        /// The anomaly detection evaluator outputs a data view by this name, which contains the the examples 
+        /// The anomaly detection evaluator outputs a data view by this name, which contains the the examples
         /// with the top scores in the test set. It contains the three columns listed below, with each row corresponding
         /// to one test example.
         /// </summary>
@@ -125,10 +124,10 @@ namespace Microsoft.ML.Runtime.Data
         }
 
         protected override void GetAggregatorConsolidationFuncs(Aggregator aggregator, AggregatorDictionaryBase[] dictionaries,
-            out Action<uint, DvText, Aggregator> addAgg, out Func<Dictionary<string, IDataView>> consolidate)
+            out Action<uint, ReadOnlyMemory<char>, Aggregator> addAgg, out Func<Dictionary<string, IDataView>> consolidate)
         {
             var stratCol = new List<uint>();
-            var stratVal = new List<DvText>();
+            var stratVal = new List<ReadOnlyMemory<char>>();
             var auc = new List<Double>();
             var drAtK = new List<Double>();
             var drAtP = new List<Double>();
@@ -136,13 +135,13 @@ namespace Microsoft.ML.Runtime.Data
             var thresholdAtK = new List<Single>();
             var thresholdAtP = new List<Single>();
             var thresholdAtNumAnomalies = new List<Single>();
-            var numAnoms = new List<DvInt8>();
+            var numAnoms = new List<long>();
 
             var scores = new List<Single>();
             var labels = new List<Single>();
-            var names = new List<DvText>();
+            var names = new List<ReadOnlyMemory<char>>();
             var topKStratCol = new List<uint>();
-            var topKStratVal = new List<DvText>();
+            var topKStratVal = new List<ReadOnlyMemory<char>>();
 
             bool hasStrats = Utils.Size(dictionaries) > 0;
 
@@ -212,7 +211,7 @@ namespace Microsoft.ML.Runtime.Data
         {
             public abstract class CountersBase
             {
-                protected struct Info
+                protected readonly struct Info
                 {
                     public readonly Single Label;
                     public readonly Single Score;
@@ -294,7 +293,7 @@ namespace Microsoft.ML.Runtime.Data
                 {
                 }
 
-                protected IEnumerable<Info> ReverseHeap(Heap<Info> heap)
+                private protected Info[] ReverseHeap(Heap<Info> heap)
                 {
                     var res = new Info[heap.Count];
                     while (heap.Count > 0)
@@ -438,9 +437,9 @@ namespace Microsoft.ML.Runtime.Data
 
             private ValueGetter<Single> _labelGetter;
             private ValueGetter<Single> _scoreGetter;
-            private ValueGetter<DvText> _nameGetter;
+            private ValueGetter<ReadOnlyMemory<char>> _nameGetter;
 
-            public readonly DvText[] Names;
+            public readonly ReadOnlyMemory<char>[] Names;
             public readonly Single[] Scores;
             public readonly Single[] Labels;
             public int NumTopExamples;
@@ -464,7 +463,7 @@ namespace Microsoft.ML.Runtime.Data
                     AggCounters = new TwoPassCounters(_k, _p);
                 _aucAggregator = new UnweightedAucAggregator(Host.Rand, reservoirSize);
 
-                Names = new DvText[_topK];
+                Names = new ReadOnlyMemory<char>[_topK];
                 Scores = new Single[_topK];
                 Labels = new Single[_topK];
             }
@@ -491,7 +490,7 @@ namespace Microsoft.ML.Runtime.Data
                 NumTopExamples = _topExamples.Count;
                 while (_topExamples.Count > 0)
                 {
-                    Names[_topExamples.Count - 1] = new DvText(_topExamples.Top.Name);
+                    Names[_topExamples.Count - 1] = _topExamples.Top.Name.AsMemory();
                     Scores[_topExamples.Count - 1] = _topExamples.Top.Score;
                     Labels[_topExamples.Count - 1] = _topExamples.Top.Label;
                     _topExamples.Pop();
@@ -516,10 +515,10 @@ namespace Microsoft.ML.Runtime.Data
                     if (_nameIndex < 0)
                     {
                         int rowCounter = 0;
-                        _nameGetter = (ref DvText dst) => dst = new DvText((rowCounter++).ToString());
+                        _nameGetter = (ref ReadOnlyMemory<char> dst) => dst = (rowCounter++).ToString().AsMemory();
                     }
                     else
-                        _nameGetter = row.GetGetter<DvText>(_nameIndex);
+                        _nameGetter = row.GetGetter<ReadOnlyMemory<char>>(_nameIndex);
                 }
             }
 
@@ -552,7 +551,7 @@ namespace Microsoft.ML.Runtime.Data
                 _aucAggregator.ProcessRow(label, score);
                 AggCounters.Update(label, score);
 
-                var name = default(DvText);
+                var name = default(ReadOnlyMemory<char>);
                 _nameGetter(ref name);
                 if (_topExamples.Count >= _topK)
                 {
@@ -632,7 +631,7 @@ namespace Microsoft.ML.Runtime.Data
                 int index;
                 if (!top.Schema.TryGetColumnIndex(AnomalyDetectionEvaluator.TopKResultsColumns.Instance, out index))
                     throw Host.Except("Data view does not contain the 'Instance' column");
-                var instanceGetter = cursor.GetGetter<DvText>(index);
+                var instanceGetter = cursor.GetGetter<ReadOnlyMemory<char>>(index);
                 if (!top.Schema.TryGetColumnIndex(AnomalyDetectionEvaluator.TopKResultsColumns.AnomalyScore, out index))
                     throw Host.Except("Data view does not contain the 'Anomaly Score' column");
                 var scoreGetter = cursor.GetGetter<Single>(index);
@@ -651,7 +650,7 @@ namespace Microsoft.ML.Runtime.Data
                         sb.AppendLine("Instance    Anomaly Score     Labeled");
                         hasRows = true;
                     }
-                    var name = default(DvText);
+                    var name = default(ReadOnlyMemory<char>);
                     Single score = 0;
                     Single label = 0;
                     instanceGetter(ref name);
@@ -678,11 +677,11 @@ namespace Microsoft.ML.Runtime.Data
             int stratVal;
             bool hasStratVals = overall.Schema.TryGetColumnIndex(MetricKinds.ColumnNames.StratVal, out stratVal);
             Contracts.Assert(hasStrat == hasStratVals);
-            DvInt8 numAnomalies = 0;
+            long numAnomalies = 0;
             using (var cursor = overall.GetRowCursor(col => col == numAnomIndex ||
                 (hasStrat && col == stratCol)))
             {
-                var numAnomGetter = cursor.GetGetter<DvInt8>(numAnomIndex);
+                var numAnomGetter = cursor.GetGetter<long>(numAnomIndex);
                 ValueGetter<uint> stratGetter = null;
                 if (hasStrat)
                 {
@@ -704,66 +703,42 @@ namespace Microsoft.ML.Runtime.Data
                 }
             }
 
-            var args = new ChooseColumnsTransform.Arguments();
-            var cols = new List<ChooseColumnsTransform.Column>()
-                {
-                    new ChooseColumnsTransform.Column()
-                    {
-                        Name = string.Format(FoldDrAtKFormat, _k),
-                        Source = AnomalyDetectionEvaluator.OverallMetrics.DrAtK
-                    },
-                    new ChooseColumnsTransform.Column()
-                    {
-                        Name = string.Format(FoldDrAtPFormat, _p),
-                        Source = AnomalyDetectionEvaluator.OverallMetrics.DrAtPFpr
-                    },
-                    new ChooseColumnsTransform.Column()
-                    {
-                        Name = string.Format(FoldDrAtNumAnomaliesFormat, numAnomalies),
-                        Source=AnomalyDetectionEvaluator.OverallMetrics.DrAtNumPos
-                    },
-                    new ChooseColumnsTransform.Column()
-                    {
-                        Name=AnomalyDetectionEvaluator.OverallMetrics.ThreshAtK
-                    },
-                    new ChooseColumnsTransform.Column()
-                    {
-                        Name=AnomalyDetectionEvaluator.OverallMetrics.ThreshAtP
-                    },
-                    new ChooseColumnsTransform.Column()
-                    {
-                        Name=AnomalyDetectionEvaluator.OverallMetrics.ThreshAtNumPos
-                    },
-                    new ChooseColumnsTransform.Column()
-                    {
-                        Name = BinaryClassifierEvaluator.Auc
-                    }
-                };
+            var kFormatName = string.Format(FoldDrAtKFormat, _k);
+            var pFormatName = string.Format(FoldDrAtPFormat, _p);
+            var numAnomName = string.Format(FoldDrAtNumAnomaliesFormat, numAnomalies);
 
-            args.Column = cols.ToArray();
-            IDataView fold = new ChooseColumnsTransform(Host, args, overall);
+            (string Source, string Name)[] cols =
+            {
+                (AnomalyDetectionEvaluator.OverallMetrics.DrAtK, kFormatName),
+                (AnomalyDetectionEvaluator.OverallMetrics.DrAtPFpr, pFormatName),
+                (AnomalyDetectionEvaluator.OverallMetrics.DrAtNumPos, numAnomName)
+            };
+
+            // List of columns to keep, note that the order specified determines the order of the output
+            var colsToKeep = new List<string>();
+            colsToKeep.Add(kFormatName);
+            colsToKeep.Add(pFormatName);
+            colsToKeep.Add(numAnomName);
+            colsToKeep.Add(AnomalyDetectionEvaluator.OverallMetrics.ThreshAtK);
+            colsToKeep.Add(AnomalyDetectionEvaluator.OverallMetrics.ThreshAtP);
+            colsToKeep.Add(AnomalyDetectionEvaluator.OverallMetrics.ThreshAtNumPos);
+            colsToKeep.Add(BinaryClassifierEvaluator.Auc);
+
+            overall = new ColumnsCopyingTransformer(Host, cols).Transform(overall);
+            IDataView fold = ColumnSelectingTransformer.CreateKeep(Host, overall, colsToKeep.ToArray());
+
             string weightedFold;
             ch.Info(MetricWriter.GetPerFoldResults(Host, fold, out weightedFold));
         }
 
-        protected override void PrintOverallResultsCore(IChannel ch, string filename, Dictionary<string, IDataView>[] metrics)
+        protected override IDataView GetOverallResultsCore(IDataView overall)
         {
-            ch.AssertNonEmpty(metrics);
-
-            IDataView overall;
-            if (!TryGetOverallMetrics(metrics, out overall))
-                throw ch.Except("No overall metrics found");
-
-            var args = new DropColumnsTransform.Arguments();
-            args.Column = new[]
-            {
-                AnomalyDetectionEvaluator.OverallMetrics.NumAnomalies,
-                AnomalyDetectionEvaluator.OverallMetrics.ThreshAtK,
-                AnomalyDetectionEvaluator.OverallMetrics.ThreshAtP,
-                AnomalyDetectionEvaluator.OverallMetrics.ThreshAtNumPos
-            };
-            overall = new DropColumnsTransform(Host, args, overall);
-            MetricWriter.PrintOverallMetrics(Host, ch, filename, overall, metrics.Length);
+            return ColumnSelectingTransformer.CreateDrop(Host,
+                                                    overall,
+                                                    AnomalyDetectionEvaluator.OverallMetrics.NumAnomalies,
+                                                    AnomalyDetectionEvaluator.OverallMetrics.ThreshAtK,
+                                                    AnomalyDetectionEvaluator.OverallMetrics.ThreshAtP,
+                                                    AnomalyDetectionEvaluator.OverallMetrics.ThreshAtNumPos);
         }
 
         protected override IEnumerable<string> GetPerInstanceColumnsToSave(RoleMappedSchema schema)
@@ -803,7 +778,7 @@ namespace Microsoft.ML.Runtime.Data
             string name;
             MatchColumns(host, input, out label, out weight, out name);
             var evaluator = new AnomalyDetectionMamlEvaluator(host, input);
-            var data = TrainUtils.CreateExamples(input.Data, label, null, null, weight, name);
+            var data = new RoleMappedData(input.Data, label, null, null, weight, name);
             var metrics = evaluator.Evaluate(data);
 
             var warnings = ExtractWarnings(host, metrics);

@@ -10,14 +10,15 @@ namespace Microsoft.ML.Runtime.Data
     /// that the default <see cref="LinkedRowRootCursorBase.GetGetter{TValue}(int)"/> assumes
     /// that each input column is exposed as an output column with the same column index.
     /// </summary>
-    public abstract class LinkedRowRootCursorBase : LinkedRootCursorBase<IRowCursor>, IRowCursor
+    [BestFriend]
+    internal abstract class LinkedRowRootCursorBase : LinkedRootCursorBase<IRowCursor>, IRowCursor
     {
         private readonly bool[] _active;
 
         /// <summary>Gets row's schema.</summary>
-        public ISchema Schema { get; }
+        public Schema Schema { get; }
 
-        protected LinkedRowRootCursorBase(IChannelProvider provider, IRowCursor input, ISchema schema, bool[] active)
+        protected LinkedRowRootCursorBase(IChannelProvider provider, IRowCursor input, Schema schema, bool[] active)
             : base(provider, input)
         {
             Ch.CheckValue(schema, nameof(schema));

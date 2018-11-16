@@ -4,7 +4,6 @@
 
 using System;
 using System.Text;
-using Microsoft.ML;
 using Microsoft.ML.Runtime;
 using Microsoft.ML.Runtime.Data;
 using Microsoft.ML.Runtime.CommandLine;
@@ -42,7 +41,7 @@ namespace Microsoft.ML.Runtime.Sweeper
         {
             StringBuilder sb = new StringBuilder();
 
-            var evaluators = ComponentCatalog.GetAllDerivedClasses(typeof(IMamlEvaluator), typeof(SignatureMamlEvaluator));
+            var evaluators = _host.ComponentCatalog.GetAllDerivedClasses(typeof(IMamlEvaluator), typeof(SignatureMamlEvaluator));
             foreach (var evalInfo in evaluators)
             {
                 var args = evalInfo.CreateArguments();

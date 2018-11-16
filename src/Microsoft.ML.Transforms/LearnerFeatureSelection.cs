@@ -2,18 +2,19 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System;
-using System.Collections.Generic;
 using Microsoft.ML.Runtime;
 using Microsoft.ML.Runtime.CommandLine;
 using Microsoft.ML.Runtime.Data;
-using Microsoft.ML.Runtime.Internal.Utilities;
 using Microsoft.ML.Runtime.Internal.Internallearn;
+using Microsoft.ML.Runtime.Internal.Utilities;
+using Microsoft.ML.Transforms;
+using System;
+using System.Collections.Generic;
 
 [assembly: LoadableClass(LearnerFeatureSelectionTransform.Summary, typeof(IDataTransform), typeof(LearnerFeatureSelectionTransform), typeof(LearnerFeatureSelectionTransform.Arguments), typeof(SignatureDataTransform),
     "Learner Feature Selection Transform", "LearnerFeatureSelectionTransform", "LearnerFeatureSelection")]
 
-namespace Microsoft.ML.Runtime.Data
+namespace Microsoft.ML.Transforms
 {
     /// <summary>
     /// Selects the slots for which the absolute value of the corresponding weight in a linear learner
@@ -32,9 +33,11 @@ namespace Microsoft.ML.Runtime.Data
             [Argument(ArgumentType.AtMostOnce, HelpText = "The number of slots to preserve", ShortName = "topk", SortOrder = 1)]
             public int? NumSlotsToKeep;
 
-            [Argument(ArgumentType.Multiple, HelpText = "Filter", ShortName = "f", SortOrder = 1)]
-            public SubComponent<ITrainer<RoleMappedData, IPredictorWithFeatureWeights<Single>>, SignatureFeatureScorerTrainer> Filter =
-                new SubComponent<ITrainer<RoleMappedData, IPredictorWithFeatureWeights<Single>>, SignatureFeatureScorerTrainer>("SDCA");
+            [Argument(ArgumentType.Multiple, HelpText = "Filter", ShortName = "f", SortOrder = 1, SignatureType = typeof(SignatureFeatureScorerTrainer))]
+            public IComponentFactory<ITrainer<IPredictorWithFeatureWeights<Single>>> Filter =
+                ComponentFactoryUtils.CreateFromFunction(env =>
+                    // ML.Transforms doesn't have a direct reference to ML.StandardLearners, so use ComponentCatalog to create the Filter
+                    ComponentCatalog.CreateInstance<ITrainer<IPredictorWithFeatureWeights<Single>>>(env, typeof(SignatureFeatureScorerTrainer), "SDCA", options: null));
 
             [Argument(ArgumentType.LastOccurenceWins, HelpText = "Column to use for features", ShortName = "feat,col", SortOrder = 3, Purpose = SpecialPurpose.ColumnName)]
             public string FeatureColumn = DefaultColumnNames.Features;
@@ -51,7 +54,7 @@ namespace Microsoft.ML.Runtime.Data
             [Argument(ArgumentType.AtMostOnce, HelpText = "Name column name", ShortName = "name", Purpose = SpecialPurpose.ColumnName)]
             public string NameColumn = DefaultColumnNames.Name;
 
-            [Argument(ArgumentType.LastOccurenceWins, HelpText = "Columns with custom kinds declared through key assignments, e.g., col[Kind]=Name to assign column named 'Name' kind 'Kind'")]
+            [Argument(ArgumentType.LastOccurenceWins, HelpText = "Columns with custom kinds declared through key assignments, for example, col[Kind]=Name to assign column named 'Name' kind 'Kind'")]
             public KeyValuePair<string, string>[] CustomColumn;
 
             [Argument(ArgumentType.LastOccurenceWins, HelpText = "Normalize option for the feature column", ShortName = "norm")]
@@ -91,7 +94,7 @@ namespace Microsoft.ML.Runtime.Data
             using (var ch = host.Start("Dropping Slots"))
             {
                 int selectedCount;
-                var column = CreateDropSlotsColumn(args, ref scores, out selectedCount);
+                var column = CreateDropSlotsColumn(args, in scores, out selectedCount);
 
                 if (column == null)
                 {
@@ -103,12 +106,11 @@ namespace Microsoft.ML.Runtime.Data
 
                 var dsArgs = new DropSlotsTransform.Arguments();
                 dsArgs.Column = new[] { column };
-                ch.Done();
                 return new DropSlotsTransform(host, dsArgs, input);
             }
         }
 
-        private static DropSlotsTransform.Column CreateDropSlotsColumn(Arguments args, ref VBuffer<Single> scores, out int selectedCount)
+        private static DropSlotsTransform.Column CreateDropSlotsColumn(Arguments args, in VBuffer<Single> scores, out int selectedCount)
         {
             // Not checking the scores.Length, because:
             // 1. If it's the same as the features column length, we should be constructing the right DropSlots arguments.
@@ -118,9 +120,10 @@ namespace Microsoft.ML.Runtime.Data
             var col = new DropSlotsTransform.Column();
             col.Source = args.FeatureColumn;
             selectedCount = 0;
+            var scoresValues = scores.GetValues();
 
             // Degenerate case, dropping all slots.
-            if (scores.Count == 0)
+            if (scoresValues.Length == 0)
             {
                 var range = new DropSlotsTransform.Range();
                 col.Slots = new DropSlotsTransform.Range[] { range };
@@ -137,13 +140,13 @@ namespace Microsoft.ML.Runtime.Data
             else
             {
                 Contracts.Assert(args.NumSlotsToKeep.HasValue);
-                threshold = ComputeThreshold(scores.Values, scores.Count, args.NumSlotsToKeep.Value, out tiedScoresToKeep);
+                threshold = ComputeThreshold(scoresValues, args.NumSlotsToKeep.Value, out tiedScoresToKeep);
             }
 
             var slots = new List<DropSlotsTransform.Range>();
-            for (int i = 0; i < scores.Count; i++)
+            for (int i = 0; i < scoresValues.Length; i++)
             {
-                var score = Math.Abs(scores.Values[i]);
+                var score = Math.Abs(scoresValues[i]);
                 if (score > threshold)
                 {
                     selectedCount++;
@@ -158,9 +161,9 @@ namespace Microsoft.ML.Runtime.Data
 
                 var range = new DropSlotsTransform.Range();
                 range.Min = i;
-                while (++i < scores.Count)
+                while (++i < scoresValues.Length)
                 {
-                    score = Math.Abs(scores.Values[i]);
+                    score = Math.Abs(scoresValues[i]);
                     if (score > threshold)
                     {
                         selectedCount++;
@@ -179,6 +182,7 @@ namespace Microsoft.ML.Runtime.Data
 
             if (!scores.IsDense)
             {
+                var scoresIndices = scores.GetIndices();
                 int ii = 0;
                 var count = slots.Count;
                 for (int i = 0; i < count; i++)
@@ -188,16 +192,16 @@ namespace Microsoft.ML.Runtime.Data
                     var min = range.Min;
                     var max = range.Max.Value;
                     Contracts.Assert(min <= max);
-                    Contracts.Assert(max < scores.Count);
+                    Contracts.Assert(max < scoresValues.Length);
 
-                    range.Min = min == 0 ? 0 : scores.Indices[min - 1] + 1;
-                    range.Max = max == scores.Count - 1 ? scores.Length - 1 : scores.Indices[max + 1] - 1;
+                    range.Min = min == 0 ? 0 : scoresIndices[min - 1] + 1;
+                    range.Max = max == scoresIndices.Length - 1 ? scores.Length - 1 : scoresIndices[max + 1] - 1;
 
                     // Add the gaps before this range.
                     for (; ii < min; ii++)
                     {
-                        var gapMin = ii == 0 ? 0 : scores.Indices[ii - 1] + 1;
-                        var gapMax = scores.Indices[ii] - 1;
+                        var gapMin = ii == 0 ? 0 : scoresIndices[ii - 1] + 1;
+                        var gapMax = scoresIndices[ii] - 1;
                         if (gapMin <= gapMax)
                         {
                             var gap = new DropSlotsTransform.Range();
@@ -210,10 +214,10 @@ namespace Microsoft.ML.Runtime.Data
                 }
 
                 // Add the gaps after the last range.
-                for (; ii <= scores.Count; ii++)
+                for (; ii <= scoresIndices.Length; ii++)
                 {
-                    var gapMin = ii == 0 ? 0 : scores.Indices[ii - 1] + 1;
-                    var gapMax = ii == scores.Count ? scores.Length - 1 : scores.Indices[ii] - 1;
+                    var gapMin = ii == 0 ? 0 : scoresIndices[ii - 1] + 1;
+                    var gapMax = ii == scoresIndices.Length ? scores.Length - 1 : scoresIndices[ii] - 1;
                     if (gapMin <= gapMax)
                     {
                         var gap = new DropSlotsTransform.Range();
@@ -238,12 +242,12 @@ namespace Microsoft.ML.Runtime.Data
             return null;
         }
 
-        private static float ComputeThreshold(float[] scores, int count, int topk, out int tiedScoresToKeep)
+        private static float ComputeThreshold(ReadOnlySpan<float> scores, int topk, out int tiedScoresToKeep)
         {
             // Use a min-heap for the topk elements
             var heap = new Heap<float>((f1, f2) => f1 > f2, topk);
 
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < scores.Length; i++)
             {
                 var score = Math.Abs(scores[i]);
                 if (float.IsNaN(score))
@@ -283,7 +287,7 @@ namespace Microsoft.ML.Runtime.Data
             using (var ch = host.Start("Train"))
             {
                 ch.Trace("Constructing trainer");
-                ITrainer trainer = args.Filter.CreateInstance(host);
+                ITrainer trainer = args.Filter.CreateComponent(host);
 
                 IDataView view = input;
 
@@ -299,15 +303,14 @@ namespace Microsoft.ML.Runtime.Data
                 ch.Trace("Binding columns");
 
                 var customCols = TrainUtils.CheckAndGenerateCustomColumns(ch, args.CustomColumn);
-                var data = TrainUtils.CreateExamples(view, label, feature, group, weight, name, customCols);
+                var data = new RoleMappedData(view, label, feature, group, weight, name, customCols);
 
-                var predictor = TrainUtils.Train(host, ch, data, trainer, args.Filter.Kind, null,
+                var predictor = TrainUtils.Train(host, ch, data, trainer, null,
                     null, 0, args.CacheData);
 
                 var rfs = predictor as IPredictorWithFeatureWeights<Single>;
                 Contracts.AssertValue(rfs);
                 rfs.GetFeatureWeights(ref scores);
-                ch.Done();
             }
         }
 

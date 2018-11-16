@@ -10,7 +10,7 @@ using Microsoft.ML.Runtime;
 using Microsoft.ML.Runtime.CommandLine;
 using Microsoft.ML.Runtime.Data;
 using Microsoft.ML.Runtime.Data.IO;
-using Microsoft.ML.Runtime.DataPipe;
+using Microsoft.ML.Transforms;
 using Microsoft.ML.Runtime.EntryPoints;
 using Microsoft.ML.Runtime.Internal.Utilities;
 using Microsoft.ML.Runtime.Model;
@@ -24,8 +24,9 @@ using Microsoft.ML.Runtime.Model;
 
 [assembly: EntryPointModule(typeof(OptionalColumnTransform))]
 
-namespace Microsoft.ML.Runtime.DataPipe
+namespace Microsoft.ML.Transforms
 {
+    /// <include file='doc.xml' path='doc/members/member[@name="OptionalColumnTransform"]/*' />
     public class OptionalColumnTransform : RowToRowMapperTransformBase
     {
         public sealed class Arguments : TransformInputBase
@@ -44,7 +45,7 @@ namespace Microsoft.ML.Runtime.DataPipe
             // The input schema of the original data view that contains the source columns. We need this
             // so that we can have the metadata even when we load this transform with new data that does not have
             // these columns.
-            private readonly ISchema _inputWithOptionalColumn;
+            private readonly Schema _inputWithOptionalColumn;
             private readonly int[] _srcColsWithOptionalColumn;
 
             private Bindings(OptionalColumnTransform parent, ColumnType[] columnTypes, int[] srcCols,
@@ -59,7 +60,7 @@ namespace Microsoft.ML.Runtime.DataPipe
                 SrcCols = srcCols;
                 _parent = parent;
                 _metadata = new MetadataDispatcher(InfoCount);
-                _inputWithOptionalColumn = inputWithOptionalColumn;
+                _inputWithOptionalColumn = Schema.Create(inputWithOptionalColumn);
                 _srcColsWithOptionalColumn = srcColsWithOptionalColumn;
                 SetMetadata();
             }
@@ -225,12 +226,24 @@ namespace Microsoft.ML.Runtime.DataPipe
                 verWrittenCur: 0x00010002, // Save the input schema, for metadata
                 verReadableCur: 0x00010002,
                 verWeCanReadBack: 0x00010002,
-                loaderSignature: LoaderSignature);
+                loaderSignature: LoaderSignature,
+                loaderAssemblyName: typeof(OptionalColumnTransform).Assembly.FullName);
         }
 
         private readonly Bindings _bindings;
 
         private const string RegistrationName = "OptionalColumn";
+
+        /// <summary>
+        /// Initializes a new instance of <see cref="OptionalColumnTransform"/>.
+        /// </summary>
+        /// <param name="env">Host Environment.</param>
+        /// <param name="input">Input <see cref="IDataView"/>. This is the output from previous transform or loader.</param>
+        /// <param name="columns">Columns to transform.</param>
+        public OptionalColumnTransform(IHostEnvironment env, IDataView input, params string[] columns)
+            : this(env, new Arguments() { Column = columns }, input)
+        {
+        }
 
         /// <summary>
         /// Public constructor corresponding to SignatureDataTransform.
@@ -275,7 +288,7 @@ namespace Microsoft.ML.Runtime.DataPipe
             _bindings.Save(Host, ctx);
         }
 
-        public override ISchema Schema { get { return _bindings; } }
+        public override Schema Schema => _bindings.AsSchema;
 
         protected override bool? ShouldUseParallelCursors(Func<int, bool> predicate)
         {
@@ -361,7 +374,6 @@ namespace Microsoft.ML.Runtime.DataPipe
                         getters[iinfo] = (Delegate)meth.Invoke(this, new object[] { input, iinfo });
                     }
                 }
-                ch.Done();
                 return getters;
             }
         }
@@ -413,7 +425,7 @@ namespace Microsoft.ML.Runtime.DataPipe
                 }
             }
 
-            public ISchema Schema { get { return _bindings; } }
+            public Schema Schema => _bindings.AsSchema;
 
             public bool IsColumnActive(int col)
             {
@@ -459,7 +471,13 @@ namespace Microsoft.ML.Runtime.DataPipe
             }
         }
 
-        [TlcModule.EntryPoint(Desc = Summary, Name = "Transforms.OptionalColumnCreator", UserName = UserName, ShortName = ShortName)]
+        [TlcModule.EntryPoint(Desc = Summary,
+            Name = "Transforms.OptionalColumnCreator",
+            UserName = UserName,
+            ShortName = ShortName,
+            XmlInclude = new[] { @"<include file='../Microsoft.ML.Transforms/doc.xml' path='doc/members/member[@name=""OptionalColumnTransform""]/*' />",
+                                 @"<include file='../Microsoft.ML.Transforms/doc.xml' path='doc/members/example[@name=""OptionalColumnTransform""]/*' />"})]
+
         public static CommonOutputs.TransformOutput MakeOptional(IHostEnvironment env, Arguments input)
         {
             var h = EntryPointUtils.CheckArgsAndCreateHost(env, "OptionalColumn", input);

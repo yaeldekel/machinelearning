@@ -3,17 +3,16 @@
 // See the LICENSE file in the project root for more information.
 
 using System;
-using Microsoft.ML.Runtime;
-using Microsoft.ML.Runtime.Data;
 
 namespace Microsoft.ML.Runtime.Internal.Utilities
 {
     using Stopwatch = System.Diagnostics.Stopwatch;
 
     /// <summary>
-    /// A timer scope class that starts a Stopwatch when created, calculates and prints elapsed time, physical and virtual memory usages before sending these to the telemetry when disposed.
+    /// A timer scope class that starts a <see cref="Stopwatch"/> when created, calculates and prints elapsed time, physical and virtual memory usages before sending these to the telemetry when disposed.
     /// </summary>
-    public sealed class TimerScope : IDisposable
+    [BestFriend]
+    internal sealed class TimerScope : IDisposable
     {
         // Note that this class does not own nor dispose of this channel.
         private readonly IChannel _ch;
@@ -46,7 +45,7 @@ namespace Microsoft.ML.Runtime.Internal.Utilities
 
             // REVIEW: This is \n\n is to prevent changes across bunch of baseline files.
             // Ideally we should change our comparison method to ignore empty lines.
-            _ch.Info("{0}\t Time elapsed(s): {1}\n\n", DateTime.Now, elapsedSeconds);
+            _ch.Info("{0}\t Time elapsed(s): {1}\n\n", DateTime.UtcNow, elapsedSeconds);
 
             using (var pipe = _host.StartPipe<TelemetryMessage>("TelemetryPipe"))
             {
@@ -55,7 +54,6 @@ namespace Microsoft.ML.Runtime.Internal.Utilities
                 pipe.Send(TelemetryMessage.CreateMetric("TLC_RunTime", elapsedSeconds));
                 pipe.Send(TelemetryMessage.CreateMetric("TLC_PhysicalMemoryUsageInMB", physicalMemoryUsageInMB));
                 pipe.Send(TelemetryMessage.CreateMetric("TLC_VirtualMemoryUsageInMB", virtualMemoryUsageInMB));
-                pipe.Done();
             }
         }
     }

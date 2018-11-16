@@ -5,6 +5,7 @@
 using Float = System.Single;
 
 using System;
+using Microsoft.ML.Core.Data;
 using Microsoft.ML.Runtime;
 using Microsoft.ML.Runtime.CommandLine;
 using Microsoft.ML.Runtime.Data;
@@ -12,6 +13,7 @@ using Microsoft.ML.Runtime.Data.Conversion;
 using Microsoft.ML.Runtime.EntryPoints;
 using Microsoft.ML.Runtime.Internal.Utilities;
 using Microsoft.ML.Runtime.Learners;
+using Microsoft.ML.Trainers;
 using Microsoft.ML.Runtime.Training;
 using Microsoft.ML.Runtime.Internal.Internallearn;
 
@@ -21,15 +23,14 @@ using Microsoft.ML.Runtime.Internal.Internallearn;
     SdcaRegressionTrainer.LoadNameValue,
     SdcaRegressionTrainer.ShortName)]
 
-namespace Microsoft.ML.Runtime.Learners
+namespace Microsoft.ML.Trainers
 {
-    using TScalarPredictor = IPredictorWithFeatureWeights<Float>;
-
-    public sealed class SdcaRegressionTrainer : SdcaTrainerBase<IPredictor>, ITrainer<RoleMappedData, TScalarPredictor>, ITrainerEx
+    /// <include file='doc.xml' path='doc/members/member[@name="SDCA"]/*' />
+    public sealed class SdcaRegressionTrainer : SdcaTrainerBase<SdcaRegressionTrainer.Arguments, RegressionPredictionTransformer<LinearRegressionPredictor>, LinearRegressionPredictor>
     {
-        public const string LoadNameValue = "SDCAR";
-        public const string UserNameValue = "Fast Linear Regression (SA-SDCA)";
-        public const string ShortName = "sasdcar";
+        internal const string LoadNameValue = "SDCAR";
+        internal const string UserNameValue = "Fast Linear Regression (SA-SDCA)";
+        internal const string ShortName = "sasdcar";
         internal const string Summary = "The SDCA linear regression trainer.";
 
         public sealed class Arguments : ArgumentsBase
@@ -48,39 +49,68 @@ namespace Microsoft.ML.Runtime.Learners
         }
 
         private readonly ISupportSdcaRegressionLoss _loss;
-        private readonly Arguments _args;
 
-        public override PredictionKind PredictionKind { get { return PredictionKind.Regression; } }
+        public override PredictionKind PredictionKind => PredictionKind.Regression;
 
-        public override bool NeedCalibration { get { return false; } }
-
-        protected override int WeightArraySize { get { return 1; } }
-
-        public SdcaRegressionTrainer(IHostEnvironment env, Arguments args)
-            : base(args, env, LoadNameValue)
+        /// <summary>
+        /// Initializes a new instance of <see cref="SdcaRegressionTrainer"/>
+        /// </summary>
+        /// <param name="env">The environment to use.</param>
+        /// <param name="labelColumn">The label, or dependent variable.</param>
+        /// <param name="featureColumn">The features, or independent variables.</param>
+        /// <param name="weights">The optional example weights.</param>
+        /// <param name="loss">The custom loss.</param>
+        /// <param name="l2Const">The L2 regularization hyperparameter.</param>
+        /// <param name="l1Threshold">The L1 regularization hyperparameter. Higher values will tend to lead to more sparse model.</param>
+        /// <param name="maxIterations">The maximum number of passes to perform over the data.</param>
+        /// <param name="advancedSettings">A delegate to set more settings.
+        /// The settings here will override the ones provided in the direct method signature,
+        /// if both are present and have different values.
+        /// The columns names, however need to be provided directly, not through the <paramref name="advancedSettings"/>.</param>
+        public SdcaRegressionTrainer(IHostEnvironment env,
+            string labelColumn = DefaultColumnNames.Label,
+            string featureColumn = DefaultColumnNames.Features,
+            string weights = null,
+            ISupportSdcaRegressionLoss loss = null,
+            float? l2Const = null,
+            float? l1Threshold = null,
+            int? maxIterations = null,
+            Action<Arguments> advancedSettings = null)
+             : base(env, featureColumn, TrainerUtils.MakeR4ScalarLabel(labelColumn), TrainerUtils.MakeR4ScalarWeightColumn(weights), advancedSettings,
+                  l2Const, l1Threshold, maxIterations)
         {
+            Host.CheckNonEmpty(featureColumn, nameof(featureColumn));
+            Host.CheckNonEmpty(labelColumn, nameof(labelColumn));
+            _loss = loss ?? Args.LossFunction.CreateComponent(env);
+            Loss = _loss;
+        }
+
+        internal SdcaRegressionTrainer(IHostEnvironment env, Arguments args, string featureColumn, string labelColumn, string weightColumn = null)
+            : base(env, args, TrainerUtils.MakeR4ScalarLabel(labelColumn), TrainerUtils.MakeR4ScalarWeightColumn(weightColumn))
+        {
+            Host.CheckValue(labelColumn, nameof(labelColumn));
+            Host.CheckValue(featureColumn, nameof(featureColumn));
+
             _loss = args.LossFunction.CreateComponent(env);
-            base.Loss = _loss;
-            NeedShuffle = args.Shuffle;
-            _args = args;
+            Loss = _loss;
         }
 
-        public override IPredictor CreatePredictor()
+        internal SdcaRegressionTrainer(IHostEnvironment env, Arguments args)
+            : this(env, args, args.FeatureColumn, args.LabelColumn)
         {
-            Contracts.Assert(WeightArraySize == 1);
-            Contracts.Assert(Utils.Size(Weights) == 1);
-            Contracts.Assert(Utils.Size(Bias) == 1);
-            Host.Check(Weights[0].Length > 0);
-            VBuffer<Float> maybeSparseWeights = VBufferUtils.CreateEmpty<Float>(Weights[0].Length);
-            VBufferUtils.CreateMaybeSparseCopy(ref Weights[0], ref maybeSparseWeights, Conversions.Instance.GetIsDefaultPredicate<Float>(NumberType.Float));
-            return new LinearRegressionPredictor(Host, ref maybeSparseWeights, Bias[0]);
         }
 
-        TScalarPredictor ITrainer<RoleMappedData, TScalarPredictor>.CreatePredictor()
+        protected override LinearRegressionPredictor CreatePredictor(VBuffer<Float>[] weights, Float[] bias)
         {
-            var predictor = CreatePredictor() as TScalarPredictor;
-            Contracts.AssertValue(predictor);
-            return predictor;
+            Host.CheckParam(Utils.Size(weights) == 1, nameof(weights));
+            Host.CheckParam(Utils.Size(bias) == 1, nameof(bias));
+            Host.CheckParam(weights[0].Length > 0, nameof(weights));
+
+            VBuffer<Float> maybeSparseWeights = default;
+            // below should be `in weights[0]`, but can't because of https://github.com/dotnet/roslyn/issues/29371
+            VBufferUtils.CreateMaybeSparseCopy(weights[0], ref maybeSparseWeights,
+                Conversions.Instance.GetIsDefaultPredicate<Float>(NumberType.Float));
+            return new LinearRegressionPredictor(Host, in maybeSparseWeights, bias[0]);
         }
 
         protected override Float GetInstanceWeight(FloatLabelCursor cursor)
@@ -88,9 +118,10 @@ namespace Microsoft.ML.Runtime.Learners
             return cursor.Weight;
         }
 
-        protected override void CheckLabel(RoleMappedData examples)
+        protected override void CheckLabel(RoleMappedData examples, out int weightSetCount)
         {
             examples.CheckRegressionLabel();
+            weightSetCount = 1;
         }
 
         // REVIEW: No extra benefits from using more threads in training.
@@ -124,14 +155,30 @@ namespace Microsoft.ML.Runtime.Learners
             ch.Info("Auto-tuning parameters: L2 = {0}.", l2);
             return l2;
         }
+
+        protected override SchemaShape.Column[] GetOutputColumnsCore(SchemaShape inputSchema)
+        {
+            return new[]
+            {
+                new SchemaShape.Column(DefaultColumnNames.Score, SchemaShape.Column.VectorKind.Scalar, NumberType.R4, false, new SchemaShape(MetadataUtils.GetTrainerOutputMetadata()))
+            };
+        }
+
+        protected override RegressionPredictionTransformer<LinearRegressionPredictor> MakeTransformer(LinearRegressionPredictor model, Schema trainSchema)
+            => new RegressionPredictionTransformer<LinearRegressionPredictor>(Host, model, trainSchema, FeatureColumn.Name);
     }
 
     /// <summary>
-    /// A component to train an SDCA model.
+    ///The Entry Point for the SDCA regressor.
     /// </summary>
     public static partial class Sdca
     {
-        [TlcModule.EntryPoint(Name = "Trainers.StochasticDualCoordinateAscentRegressor", Desc = "Train an SDCA regression model", UserName = SdcaRegressionTrainer.UserNameValue, ShortName = SdcaRegressionTrainer.ShortName)]
+        [TlcModule.EntryPoint(Name = "Trainers.StochasticDualCoordinateAscentRegressor",
+            Desc = SdcaRegressionTrainer.Summary,
+            UserName = SdcaRegressionTrainer.UserNameValue,
+            ShortName = SdcaRegressionTrainer.ShortName,
+            XmlInclude = new[] { @"<include file='../Microsoft.ML.StandardLearners/Standard/doc.xml' path='doc/members/member[@name=""SDCA""]/*' />",
+                                 @"<include file='../Microsoft.ML.StandardLearners/Standard/doc.xml' path='doc/members/example[@name=""StochasticDualCoordinateAscentRegressor""]/*' />" })]
         public static CommonOutputs.RegressionOutput TrainRegression(IHostEnvironment env, SdcaRegressionTrainer.Arguments input)
         {
             Contracts.CheckValue(env, nameof(env));

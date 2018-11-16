@@ -17,7 +17,8 @@ namespace Microsoft.ML.Runtime.Internal.Utilities
     /// Also implements memory efficient sorting.
     /// Note: Supports adding and looking up of items but does not support removal of items.
     /// </summary>
-    public sealed class HashArray<TItem>
+    [BestFriend]
+    internal sealed class HashArray<TItem>
         // REVIEW: May want to not consider not making TItem have to be IComparable but instead
         // could support user specified sort order.
         where TItem : IEquatable<TItem>, IComparable<TItem>
@@ -243,7 +244,7 @@ namespace Microsoft.ML.Runtime.Internal.Utilities
         {
             // Note: This HashHelpers class was adapted from the BCL code base.
 
-            // This is the maximum prime smaller than Array.MaxArrayLength 
+            // This is the maximum prime smaller than Array.MaxArrayLength
             public const int MaxPrimeArrayLength = 0x7FEFFFFD;
 
             // Table of prime numbers to use as hash table sizes.
@@ -271,7 +272,7 @@ namespace Microsoft.ML.Runtime.Internal.Utilities
                 return min + 1;
             }
 
-            // Returns size of hashtable to grow to. 
+            // Returns size of hashtable to grow to.
             public static int ExpandPrime(int oldSize)
             {
                 int newSize = 2 * oldSize;

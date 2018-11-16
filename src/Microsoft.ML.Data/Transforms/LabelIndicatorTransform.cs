@@ -2,15 +2,15 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System;
-using System.Text;
 using Microsoft.ML.Runtime;
 using Microsoft.ML.Runtime.CommandLine;
 using Microsoft.ML.Runtime.Data;
 using Microsoft.ML.Runtime.EntryPoints;
 using Microsoft.ML.Runtime.Internal.Utilities;
 using Microsoft.ML.Runtime.Model;
-using Microsoft.ML.Runtime.Internal.Internallearn;
+using Microsoft.ML.Transforms;
+using System;
+using System.Text;
 
 [assembly: LoadableClass(typeof(LabelIndicatorTransform), typeof(LabelIndicatorTransform.Arguments), typeof(SignatureDataTransform),
     LabelIndicatorTransform.UserName, LabelIndicatorTransform.LoadName, "LabelIndicator")]
@@ -18,7 +18,7 @@ using Microsoft.ML.Runtime.Internal.Internallearn;
     LabelIndicatorTransform.LoaderSignature)]
 [assembly: LoadableClass(typeof(void), typeof(LabelIndicatorTransform), null, typeof(SignatureEntryPointModule), LabelIndicatorTransform.LoadName)]
 
-namespace Microsoft.ML.Runtime.Data
+namespace Microsoft.ML.Transforms
 {
     /// <summary>
     /// Remaps multiclass labels to binary T,F labels, primarily for use with OVA.
@@ -39,7 +39,8 @@ namespace Microsoft.ML.Runtime.Data
                 verWrittenCur: 0x00010001, // Initial
                 verReadableCur: 0x00010001,
                 verWeCanReadBack: 0x00010001,
-                loaderSignature: LoaderSignature);
+                loaderSignature: LoaderSignature,
+                loaderAssemblyName: typeof(LabelIndicatorTransform).Assembly.FullName);
         }
 
         public sealed class Column : OneToOneColumn
@@ -111,6 +112,23 @@ namespace Microsoft.ML.Runtime.Data
             return $"Label column type is not supported for binary remapping: {type}. Supported types: key, float, double.";
         }
 
+        /// <summary>
+        /// Initializes a new instance of <see cref="LabelIndicatorTransform"/>.
+        /// </summary>
+        /// <param name="env">Host Environment.</param>
+        /// <param name="input">Input <see cref="IDataView"/>. This is the output from previous transform or loader.</param>
+        /// <param name="classIndex">Label of the positive class.</param>
+        /// <param name="name">Name of the output column.</param>
+        /// <param name="source">Name of the input column.  If this is null '<paramref name="name"/>' will be used.</param>
+        public LabelIndicatorTransform(IHostEnvironment env,
+            IDataView input,
+            int classIndex,
+            string name,
+            string source = null)
+            : this(env, new Arguments() { Column = new[] { new Column() { Source = source ?? name, Name = name } }, ClassIndex = classIndex }, input)
+        {
+        }
+
         public LabelIndicatorTransform(IHostEnvironment env, Arguments args, IDataView input)
             : base(env, LoadName, Contracts.CheckRef(args, nameof(args)).Column,
                 input, TestIsMulticlassLabel)
@@ -157,7 +175,7 @@ namespace Microsoft.ML.Runtime.Data
             return GetGetter(ch, input, iinfo);
         }
 
-        private ValueGetter<DvBool> GetGetter(IChannel ch, IRow input, int iinfo)
+        private ValueGetter<bool> GetGetter(IChannel ch, IRow input, int iinfo)
         {
             Host.AssertValue(ch);
             ch.AssertValue(input);
@@ -173,7 +191,7 @@ namespace Microsoft.ML.Runtime.Data
                 uint cls = (uint)(_classIndex[iinfo] + 1);
 
                 return
-                    (ref DvBool dst) =>
+                    (ref bool dst) =>
                     {
                         srcGetter(ref src);
                         dst = src == cls;
@@ -185,7 +203,7 @@ namespace Microsoft.ML.Runtime.Data
                 var src = default(float);
 
                 return
-                    (ref DvBool dst) =>
+                    (ref bool dst) =>
                     {
                         srcGetter(ref src);
                         dst = src == _classIndex[iinfo];
@@ -197,7 +215,7 @@ namespace Microsoft.ML.Runtime.Data
                 var src = default(double);
 
                 return
-                    (ref DvBool dst) =>
+                    (ref bool dst) =>
                     {
                         srcGetter(ref src);
                         dst = src == _classIndex[iinfo];

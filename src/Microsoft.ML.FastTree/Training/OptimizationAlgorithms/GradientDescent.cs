@@ -2,11 +2,12 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using Microsoft.ML.Runtime;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace Microsoft.ML.Runtime.FastTree.Internal
+namespace Microsoft.ML.Trainers.FastTree.Internal
 {
     public class GradientDescent : OptimizationAlgorithm
     {
@@ -21,7 +22,7 @@ namespace Microsoft.ML.Runtime.FastTree.Internal
         private double[] _droppedScores;
         private double[] _scores;
 
-        public GradientDescent(Ensemble ensemble, Dataset trainData, double[] initTrainScores, IGradientAdjuster gradientWrapper)
+        public GradientDescent(TreeEnsemble ensemble, Dataset trainData, double[] initTrainScores, IGradientAdjuster gradientWrapper)
             : base(ensemble, trainData, initTrainScores)
         {
             _gradientWrapper = gradientWrapper;
@@ -51,7 +52,7 @@ namespace Microsoft.ML.Runtime.FastTree.Internal
                 if ((_numberOfDroppedTrees == 0) && (numberOfTrees > 0))
                 {
                     droppedTrees = new int[] { DropoutRng.Next(numberOfTrees) };
-                    // force at least a single tree to be dropped 
+                    // force at least a single tree to be dropped
                     _numberOfDroppedTrees = droppedTrees.Length;
                 }
                 ch.Trace("dropout: Dropping {0} trees of {1} for rate {2}",
@@ -104,7 +105,7 @@ namespace Microsoft.ML.Runtime.FastTree.Internal
             using (Timer.Time(TimerEvent.TreeLearnerAdjustTreeOutputs))
             {
                 double[] backupScores = null;
-                // when doing dropouts we need to replace the TrainingScores with the scores without the dropped trees 
+                // when doing dropouts we need to replace the TrainingScores with the scores without the dropped trees
                 if (DropoutRate > 0)
                 {
                     backupScores = TrainingScores.Scores;

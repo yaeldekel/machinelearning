@@ -10,7 +10,8 @@ namespace Microsoft.ML.Runtime.Data
     /// It delegates all ICursor functionality except Dispose() to the root cursor.
     /// Dispose is virtual with the default implementation delegating to the input cursor.
     /// </summary>
-    public abstract class SynchronizedCursorBase<TBase> : ICursor
+    [BestFriend]
+    internal abstract class SynchronizedCursorBase<TBase> : ICursor
         where TBase : class, ICursor
     {
         protected readonly IChannel Ch;
@@ -46,7 +47,6 @@ namespace Microsoft.ML.Runtime.Data
             if (!_disposed)
             {
                 Input.Dispose();
-                Ch.Done();
                 Ch.Dispose();
                 _disposed = true;
             }

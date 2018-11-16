@@ -13,6 +13,7 @@ using Microsoft.ML.Runtime.Data.Conversion;
 using Microsoft.ML.Runtime.EntryPoints;
 using Microsoft.ML.Runtime.Internal.Utilities;
 using Microsoft.ML.Runtime.Model;
+using Microsoft.ML.Transforms;
 
 [assembly: LoadableClass(UngroupTransform.Summary, typeof(UngroupTransform), typeof(UngroupTransform.Arguments), typeof(SignatureDataTransform),
     UngroupTransform.UserName, UngroupTransform.ShortName)]
@@ -20,30 +21,30 @@ using Microsoft.ML.Runtime.Model;
 [assembly: LoadableClass(UngroupTransform.Summary, typeof(UngroupTransform), null, typeof(SignatureLoadDataTransform),
     UngroupTransform.UserName, UngroupTransform.LoaderSignature)]
 
-namespace Microsoft.ML.Runtime.Data
+namespace Microsoft.ML.Transforms
 {
-    /// <summary>
-    /// This can be thought of as an inverse of <see cref="GroupTransform"/>. For all specified vector columns 
-    /// ("pivot" columns), performs the "ungroup" (or "unroll") operation as outlined below.
-    /// 
-    /// If the only pivot column is called P, and has size K, then for every row of the input we will produce 
-    /// K rows, that are identical in all columns except P. The column P will become a scalar column, and this 
-    /// column will hold all the original values of input's P, one value per row, in order. The order of columns 
-    /// will remain the same.
-    /// 
-    /// Variable-length pivot columns are supported (including zero, which will eliminate the row from the result).
-    /// 
-    /// Multiple pivot columns are also supported:
-    /// * A number of output rows is controlled by the 'mode' parameter. 
-    ///     - outer: it is equal to the maximum length of pivot columns,
-    ///     - inner: it is equal to the minimum length of pivot columns,
-    ///     - first: it is equal to the length of the first pivot column.
-    /// * If a particular pivot column has size that is different than the number of output rows, the extra slots will
-    /// be ignored, and the missing slots will be 'padded' with default values.
-    /// 
-    /// All metadata is preserved for the retained columns. For 'unrolled' columns, all known metadata
-    /// except slot names is preserved.
-    /// </summary>
+
+    // This can be thought of as an inverse of GroupTransform. For all specified vector columns
+    // ("pivot" columns), performs the "ungroup" (or "unroll") operation as outlined below.
+    //
+    // If the only pivot column is called P, and has size K, then for every row of the input we will produce
+    // K rows, that are identical in all columns except P. The column P will become a scalar column, and this
+    // column will hold all the original values of input's P, one value per row, in order. The order of columns
+    // will remain the same.
+    //
+    // Variable-length pivot columns are supported (including zero, which will eliminate the row from the result).
+    //
+    // Multiple pivot columns are also supported:
+    // * A number of output rows is controlled by the 'mode' parameter.
+    //     - outer: it is equal to the maximum length of pivot columns,
+    //     - inner: it is equal to the minimum length of pivot columns,
+    //     - first: it is equal to the length of the first pivot column.
+    // * If a particular pivot column has size that is different than the number of output rows, the extra slots will
+    // be ignored, and the missing slots will be 'padded' with default values.
+    //
+    // All metadata is preserved for the retained columns. For 'unrolled' columns, all known metadata
+    // except slot names is preserved.
+    /// <include file='doc.xml' path='doc/members/member[@name="Ungroup"]/*' />
     public sealed class UngroupTransform : TransformBase
     {
         public const string Summary = "Un-groups vector columns into sequences of rows, inverse of Group transform";
@@ -58,13 +59,28 @@ namespace Microsoft.ML.Runtime.Data
                 verWrittenCur: 0x00010001, // Initial
                 verReadableCur: 0x00010001,
                 verWeCanReadBack: 0x00010001,
-                loaderSignature: LoaderSignature);
+                loaderSignature: LoaderSignature,
+                loaderAssemblyName: typeof(UngroupTransform).Assembly.FullName);
         }
 
+        /// <summary>
+        /// Controls the number of output rows produced by the <see cref="UngroupTransform"/> transform
+        /// </summary>
         public enum UngroupMode
         {
+            /// <summary>
+            /// The number of output rows is equal to the minimum length of pivot columns
+            /// </summary>
             Inner,
+
+            /// <summary>
+            /// The number of output rows is equal to the maximum length of pivot columns
+            /// </summary>
             Outer,
+
+            /// <summary>
+            /// The number of output rows is equal to the length of the first pivot column.
+            /// </summary>
             First
         }
 
@@ -78,6 +94,18 @@ namespace Microsoft.ML.Runtime.Data
         }
 
         private readonly SchemaImpl _schemaImpl;
+
+        /// <summary>
+        /// Initializes a new instance of <see cref="UngroupTransform"/>.
+        /// </summary>
+        /// <param name="env">Host Environment.</param>
+        /// <param name="input">Input <see cref="IDataView"/>. This is the output from previous transform or loader.</param>
+        /// <param name="mode">Specifies how to unroll multiple pivot columns of different size.</param>
+        /// <param name="columns">Columns to unroll, or 'pivot'</param>
+        public UngroupTransform(IHostEnvironment env, IDataView input, UngroupMode mode, params string[] columns)
+            : this(env, new Arguments() { Column = columns, Mode = mode }, input)
+        {
+        }
 
         public UngroupTransform(IHostEnvironment env, Arguments args, IDataView input)
             : base(env, LoaderSignature, input)
@@ -121,23 +149,20 @@ namespace Microsoft.ML.Runtime.Data
             _schemaImpl.Save(ctx);
         }
 
-        public override long? GetRowCount(bool lazy = true)
+        public override long? GetRowCount()
         {
             // Row count is known if the input's row count is known, and pivot column sizes are fixed.
             var commonSize = _schemaImpl.GetCommonPivotColumnSize();
             if (commonSize > 0)
             {
-                long? srcRowCount = Source.GetRowCount(true);
+                long? srcRowCount = Source.GetRowCount();
                 if (srcRowCount.HasValue && srcRowCount.Value <= (long.MaxValue / commonSize))
                     return srcRowCount.Value * commonSize;
             }
             return null;
         }
 
-        public override ISchema Schema
-        {
-            get { return _schemaImpl; }
-        }
+        public override Schema Schema => _schemaImpl.AsSchema;
 
         protected override bool? ShouldUseParallelCursors(Func<int, bool> predicate)
         {
@@ -145,8 +170,8 @@ namespace Microsoft.ML.Runtime.Data
             return null;
         }
 
-        // Technically, we could shuffle the ungrouped data if the source can shuffle. However, we want to maintain 
-        // contiguous groups. There's also a question whether we should shuffle inside groups or just shuffle groups 
+        // Technically, we could shuffle the ungrouped data if the source can shuffle. However, we want to maintain
+        // contiguous groups. There's also a question whether we should shuffle inside groups or just shuffle groups
         // themselves. With these issues, and no anticipated use for shuffled version, it's safer to not shuffle at all.
         public override bool CanShuffle
         {
@@ -188,7 +213,7 @@ namespace Microsoft.ML.Runtime.Data
                 }
             }
 
-            public struct PivotColumnInfo
+            public readonly struct PivotColumnInfo
             {
                 public readonly string Name;
                 public readonly int Index;
@@ -208,7 +233,7 @@ namespace Microsoft.ML.Runtime.Data
                 }
             }
 
-            private readonly ISchema _inputSchema;
+            private readonly Schema _inputSchema;
             private readonly IExceptionContext _ectx;
 
             public readonly UngroupMode Mode;
@@ -219,7 +244,9 @@ namespace Microsoft.ML.Runtime.Data
             // pivotIndex[col] = -1 for non-pivot columns, and the index of the corresponding info in _infos for pivot columns.
             private readonly int[] _pivotIndex;
 
-            public SchemaImpl(IExceptionContext ectx, ISchema inputSchema, UngroupMode mode, string[] pivotColumns)
+            public Schema AsSchema { get; }
+
+            public SchemaImpl(IExceptionContext ectx, Schema inputSchema, UngroupMode mode, string[] pivotColumns)
             {
                 Contracts.AssertValueOrNull(ectx);
                 _ectx = ectx;
@@ -240,6 +267,8 @@ namespace Microsoft.ML.Runtime.Data
                     _ectx.Assert(_pivotIndex[info.Index] == -1);
                     _pivotIndex[info.Index] = i;
                 }
+
+                AsSchema = Runtime.Data.Schema.Create(this);
             }
 
             private static void CheckAndBind(IExceptionContext ectx, ISchema inputSchema,
@@ -266,7 +295,7 @@ namespace Microsoft.ML.Runtime.Data
                 }
             }
 
-            public static SchemaImpl Create(ModelLoadContext ctx, IExceptionContext ectx, ISchema inputSchema)
+            public static SchemaImpl Create(ModelLoadContext ctx, IExceptionContext ectx, Schema inputSchema)
             {
                 Contracts.AssertValueOrNull(ectx);
                 ectx.AssertValue(ctx);
@@ -414,7 +443,7 @@ namespace Microsoft.ML.Runtime.Data
 
         private sealed class Cursor : LinkedRootCursorBase<IRowCursor>, IRowCursor
         {
-            private readonly SchemaImpl _schema;
+            private readonly SchemaImpl _schemaImpl;
 
             // The size of the pivot column in the current row. If the cursor is in good state, this is positive.
             // It's calculated on every row, based on UngroupMode.
@@ -434,31 +463,31 @@ namespace Microsoft.ML.Runtime.Data
             // For each pivot column that we care about, these getters return the vector size.
             private readonly Func<int>[] _sizeGetters;
 
-            // As a side effect, getters also populate these actual sizes of the necessary pivot columns on MoveNext. 
+            // As a side effect, getters also populate these actual sizes of the necessary pivot columns on MoveNext.
             // Parallel to columns.
             private int[] _colSizes;
 
             public Cursor(IChannelProvider provider, IRowCursor input, SchemaImpl schema, Func<int, bool> predicate)
                 : base(provider, input)
             {
-                _schema = schema;
-                _active = Utils.BuildArray(_schema.ColumnCount, predicate);
-                _cachedGetters = new Delegate[_schema.ColumnCount];
-                _colSizes = new int[_schema.ColumnCount];
+                _schemaImpl = schema;
+                _active = Utils.BuildArray(_schemaImpl.ColumnCount, predicate);
+                _cachedGetters = new Delegate[_schemaImpl.ColumnCount];
+                _colSizes = new int[_schemaImpl.ColumnCount];
 
-                int sizeColumnsLim = _schema.Mode == UngroupMode.First ? 1 : _schema.PivotColumnCount;
+                int sizeColumnsLim = _schemaImpl.Mode == UngroupMode.First ? 1 : _schemaImpl.PivotColumnCount;
                 _fixedSize = 0;
                 var needed = new List<Func<int>>();
                 for (int i = 0; i < sizeColumnsLim; i++)
                 {
-                    var info = _schema.GetPivotColumnInfo(i);
+                    var info = _schemaImpl.GetPivotColumnInfo(i);
                     if (info.Size > 0)
                     {
                         if (_fixedSize == 0)
                             _fixedSize = info.Size;
-                        else if (_schema.Mode == UngroupMode.Inner && _fixedSize > info.Size)
+                        else if (_schemaImpl.Mode == UngroupMode.Inner && _fixedSize > info.Size)
                             _fixedSize = info.Size;
-                        else if (_schema.Mode == UngroupMode.Outer && _fixedSize < info.Size)
+                        else if (_schemaImpl.Mode == UngroupMode.Outer && _fixedSize < info.Size)
                             _fixedSize = info.Size;
                     }
                     else
@@ -523,14 +552,14 @@ namespace Microsoft.ML.Runtime.Data
                 foreach (var getter in _sizeGetters)
                 {
                     var colSize = getter();
-                    if (_schema.Mode == UngroupMode.Inner && colSize == 0)
+                    if (_schemaImpl.Mode == UngroupMode.Inner && colSize == 0)
                         return 0;
 
                     if (size == 0)
                         size = colSize;
-                    else if (_schema.Mode == UngroupMode.Inner && size > colSize)
+                    else if (_schemaImpl.Mode == UngroupMode.Inner && size > colSize)
                         size = colSize;
-                    else if (_schema.Mode == UngroupMode.Outer && size < colSize)
+                    else if (_schemaImpl.Mode == UngroupMode.Outer && size < colSize)
                         size = colSize;
                 }
 
@@ -539,7 +568,7 @@ namespace Microsoft.ML.Runtime.Data
 
             private Func<int> MakeSizeGetter<T>(int col)
             {
-                Contracts.Assert(0 <= col && col < _schema.ColumnCount);
+                Contracts.Assert(0 <= col && col < _schemaImpl.ColumnCount);
 
                 var srcGetter = GetGetter<T>(col);
                 var cur = default(T);
@@ -553,26 +582,23 @@ namespace Microsoft.ML.Runtime.Data
                     };
             }
 
-            public ISchema Schema
-            {
-                get { return _schema; }
-            }
+            public Schema Schema => _schemaImpl.AsSchema;
 
             public bool IsColumnActive(int col)
             {
-                Ch.Check(0 <= col && col < _schema.ColumnCount);
+                Ch.Check(0 <= col && col < _schemaImpl.ColumnCount);
                 return _active[col];
             }
 
             public ValueGetter<TValue> GetGetter<TValue>(int col)
             {
-                Ch.CheckParam(0 <= col && col < _schema.ColumnCount, nameof(col));
+                Ch.CheckParam(0 <= col && col < _schemaImpl.ColumnCount, nameof(col));
 
-                if (!_schema.IsPivot(col))
+                if (!_schemaImpl.IsPivot(col))
                     return Input.GetGetter<TValue>(col);
 
                 if (_cachedGetters[col] == null)
-                    _cachedGetters[col] = MakeGetter<TValue>(col, _schema.GetPivotColumnInfoByCol(col).ItemType);
+                    _cachedGetters[col] = MakeGetter<TValue>(col, _schemaImpl.GetPivotColumnInfoByCol(col).ItemType);
 
                 var result = _cachedGetters[col] as ValueGetter<TValue>;
                 Ch.Check(result != null, "Unexpected getter type requested");
@@ -584,11 +610,11 @@ namespace Microsoft.ML.Runtime.Data
                 var srcGetter = Input.GetGetter<VBuffer<T>>(col);
                 // The position of the source cursor. Used to extract the source row once.
                 long cachedPosition = -1;
-                // The position inside the sparse row. If the row is sparse, the invariant is 
+                // The position inside the sparse row. If the row is sparse, the invariant is
                 // cachedIndex == row.Count || _pivotColPosition <= row.Indices[cachedIndex].
                 int cachedIndex = 0;
                 VBuffer<T> row = default(VBuffer<T>);
-                T naValue = Conversions.Instance.GetNAOrDefault<T>(itemType);
+                T naValue = Runtime.Data.Conversion.Conversions.Instance.GetNAOrDefault<T>(itemType);
                 return
                     (ref T value) =>
                     {
@@ -605,18 +631,20 @@ namespace Microsoft.ML.Runtime.Data
                             cachedIndex = 0;
                         }
 
+                        var rowValues = row.GetValues();
                         if (_pivotColPosition >= row.Length)
                             value = naValue;
                         else if (row.IsDense)
-                            value = row.Values[_pivotColPosition];
+                            value = rowValues[_pivotColPosition];
                         else
                         {
                             // The row is sparse.
-                            while (cachedIndex < row.Count && _pivotColPosition > row.Indices[cachedIndex])
+                            var rowIndices = row.GetIndices();
+                            while (cachedIndex < rowIndices.Length && _pivotColPosition > rowIndices[cachedIndex])
                                 cachedIndex++;
 
-                            if (cachedIndex < row.Count && _pivotColPosition == row.Indices[cachedIndex])
-                                value = row.Values[cachedIndex];
+                            if (cachedIndex < rowIndices.Length && _pivotColPosition == rowIndices[cachedIndex])
+                                value = rowValues[cachedIndex];
                             else
                                 value = default(T);
                         }
@@ -627,7 +655,12 @@ namespace Microsoft.ML.Runtime.Data
 
     public static partial class GroupingOperations
     {
-        [TlcModule.EntryPoint(Name = "Transforms.Segregator", Desc = UngroupTransform.Summary, UserName = UngroupTransform.UserName, ShortName = UngroupTransform.ShortName)]
+        [TlcModule.EntryPoint(Name = "Transforms.Segregator",
+            Desc = UngroupTransform.Summary,
+            UserName = UngroupTransform.UserName,
+            ShortName = UngroupTransform.ShortName,
+            XmlInclude = new[] { @"<include file='../Microsoft.ML.Transforms/doc.xml' path='doc/members/member[@name=""Ungroup""]/*' />",
+                                 @"<include file='../Microsoft.ML.Transforms/doc.xml' path='doc/members/example[@name=""Ungroup""]/*' />"})]
         public static CommonOutputs.TransformOutput Ungroup(IHostEnvironment env, UngroupTransform.Arguments input)
         {
             Contracts.CheckValue(env, nameof(env));

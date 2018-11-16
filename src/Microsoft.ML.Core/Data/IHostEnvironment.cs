@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 using System;
+using System.ComponentModel.Composition.Hosting;
 
 namespace Microsoft.ML.Runtime
 {
@@ -47,6 +48,11 @@ namespace Microsoft.ML.Runtime
         bool IsCancelled { get; }
 
         /// <summary>
+        /// The catalog of loadable components (<see cref="LoadableClassAttribute"/>) that are available in this host.
+        /// </summary>
+        ComponentCatalog ComponentCatalog { get; }
+
+        /// <summary>
         /// Return a file handle for an input "file".
         /// </summary>
         IFileHandle OpenInputFile(string path);
@@ -62,11 +68,17 @@ namespace Microsoft.ML.Runtime
         /// Note that IFileHandle derives from IDisposable. Clients may dispose the IFileHandle when it is
         /// no longer needed, but they are not required to. The host environment should track all temp file
         /// handles and ensure that they are disposed properly when the environment is "shut down".
-        /// 
+        ///
         /// The suffix and prefix are optional. A common use for suffix is to specify an extension, eg, ".txt".
-        /// The use of suffix and prefix, including whether they have any affect, is up to the host enviroment.
+        /// The use of suffix and prefix, including whether they have any affect, is up to the host environment.
         /// </summary>
         IFileHandle CreateTempFile(string suffix = null, string prefix = null);
+
+        /// <summary>
+        /// Get the MEF composition container. This can be used to instantiate user-provided 'parts' when the model
+        /// is being loaded, or the components are otherwise created via dependency injection.
+        /// </summary>
+        CompositionContainer GetCompositionContainer();
     }
 
     /// <summary>
@@ -99,11 +111,6 @@ namespace Microsoft.ML.Runtime
         /// The caller relinquishes ownership of the <paramref name="msg"/> object.
         /// </summary>
         void Send(TMessage msg);
-
-        /// <summary>
-        /// Called to indicate a normal shut-down of the pipe before disposing.
-        /// </summary>
-        void Done();
     }
 
     /// <summary>
@@ -169,7 +176,7 @@ namespace Microsoft.ML.Runtime
     /// <summary>
     /// A channel message.
     /// </summary>
-    public struct ChannelMessage
+    public readonly struct ChannelMessage
     {
         public readonly ChannelMessageKind Kind;
         public readonly MessageSensitivity Sensitivity;
@@ -219,7 +226,7 @@ namespace Microsoft.ML.Runtime
     /// <summary>
     /// General utility extension methods for objects in the "host" universe, i.e.,
     /// <see cref="IHostEnvironment"/>, <see cref="IHost"/>, and <see cref="IChannel"/>
-    /// that do not belong in more specific areas, e.g., <see cref="Contracts"/> or
+    /// that do not belong in more specific areas, for example, <see cref="Contracts"/> or
     /// component creation.
     /// </summary>
     public static class HostExtensions
@@ -230,7 +237,6 @@ namespace Microsoft.ML.Runtime
             using (var ch = host.Start(channelName))
             {
                 t = func(ch);
-                ch.Done();
             }
             return t;
         }
@@ -247,7 +253,7 @@ namespace Microsoft.ML.Runtime
         /// setting <see cref="MessageSensitivity.Unknown"/>.
         /// </summary>
         public static void Trace(this IChannel ch, string fmt, params object[] args)
-            => ch.Trace(MessageSensitivity.Unknown, fmt);
+            => ch.Trace(MessageSensitivity.Unknown, fmt, args);
 
         /// <summary>
         /// Convenience variant of <see cref="IChannel.Error(MessageSensitivity, string)"/>

@@ -12,6 +12,7 @@ using Microsoft.ML.Runtime.Data;
 using Microsoft.ML.Runtime.EntryPoints;
 using Microsoft.ML.Runtime.Internal.Utilities;
 using Microsoft.ML.Runtime.Model;
+using Microsoft.ML.Transforms;
 
 [assembly: LoadableClass(GroupTransform.Summary, typeof(GroupTransform), typeof(GroupTransform.Arguments), typeof(SignatureDataTransform),
     GroupTransform.UserName, GroupTransform.ShortName)]
@@ -19,23 +20,27 @@ using Microsoft.ML.Runtime.Model;
 [assembly: LoadableClass(GroupTransform.Summary, typeof(GroupTransform), null, typeof(SignatureLoadDataTransform),
     GroupTransform.UserName, GroupTransform.LoaderSignature)]
 
-[assembly: EntryPointModule(typeof(GroupingOperations))]
+[assembly: EntryPointModule(typeof(Microsoft.ML.Transforms.GroupingOperations))]
 
-namespace Microsoft.ML.Runtime.Data
+namespace Microsoft.ML.Transforms
 {
     /// <summary>
-    /// This transform essentially performs the following SQL-like operation:
-    /// SELECT GroupKey1, GroupKey2, ... GroupKeyK, LIST(Value1), LIST(Value2), ... LIST(ValueN)
+    /// A Trasforms that groups values of a scalar column into a vector, by a contiguous group ID.
+    /// </summary>
+    /// <remarks>
+    /// <p>This transform essentially performs the following SQL-like operation:</p>
+    /// <p>SELECT GroupKey1, GroupKey2, ... GroupKeyK, LIST(Value1), LIST(Value2), ... LIST(ValueN)
     /// FROM Data
-    /// GROUP BY GroupKey1, GroupKey2, ... GroupKeyK.
-    /// 
-    /// It assumes that the group keys are contiguous (if a new group key sequence is encountered, the group is over).
+    /// GROUP BY GroupKey1, GroupKey2, ... GroupKeyK.</p>
+    ///
+    /// <p>It assumes that the group keys are contiguous (if a new group key sequence is encountered, the group is over).
     /// The GroupKeyN and ValueN columns can be of any primitive types. The code requires that every raw type T of the group key column
     /// is an <see cref="IEquatable{T}"/>, which is currently true for all existing primitive types.
-    /// The produced ValueN columns will be variable-length vectors of the original value column types.
-    /// 
-    /// The order of ValueN entries in the lists is preserved.
-    /// 
+    /// The produced ValueN columns will be variable-length vectors of the original value column types.</p>
+    ///
+    /// <p>The order of ValueN entries in the lists is preserved.</p>
+    ///
+    /// <example><code>
     /// Example:
     /// User Item
     /// Pete Book
@@ -43,13 +48,14 @@ namespace Microsoft.ML.Runtime.Data
     /// Tom  Kitten
     /// Pete Chair
     /// Pete Cup
-    /// 
+    ///
     /// Result:
     /// User Item
     /// Pete [Book]
     /// Tom  [Table, Kitten]
-    /// Pete [Chair, Cup] 
-    /// </summary>
+    /// Pete [Chair, Cup]
+    /// </code></example>
+    /// </remarks>
     public sealed class GroupTransform : TransformBase
     {
         public const string Summary = "Groups values of a scalar column into a vector, by a contiguous group ID";
@@ -65,16 +71,17 @@ namespace Microsoft.ML.Runtime.Data
                  verWrittenCur: 0x00010001, // Initial
                 verReadableCur: 0x00010001,
                 verWeCanReadBack: 0x00010001,
-                loaderSignature: LoaderSignature);
+                loaderSignature: LoaderSignature,
+                loaderAssemblyName: typeof(GroupTransform).Assembly.FullName);
         }
 
-        // REVIEW: maybe we want to have an option to keep all non-group scalar columns, as opposed to 
+        // REVIEW: maybe we want to have an option to keep all non-group scalar columns, as opposed to
         // explicitly listing the ones to keep.
 
         // REVIEW: group keys and keep columns can possibly be vectors, not implemented now.
 
         // REVIEW: it might be feasible to have columns that are constant throughout a group, without having to list them
-        // as group keys. 
+        // as group keys.
         public sealed class Arguments : TransformInputBase
         {
             [Argument(ArgumentType.Multiple, HelpText = "Columns to group by", ShortName = "g", SortOrder = 1,
@@ -86,7 +93,19 @@ namespace Microsoft.ML.Runtime.Data
             public string[] Column;
         }
 
-        private readonly GroupSchema _schema;
+        private readonly GroupSchema _groupSchema;
+
+        /// <summary>
+        /// Initializes a new instance of <see cref="GroupTransform"/>.
+        /// </summary>
+        /// <param name="env">Host Environment.</param>
+        /// <param name="input">Input <see cref="IDataView"/>. This is the output from previous transform or loader.</param>
+        /// <param name="groupKey">Columns to group by</param>
+        /// <param name="columns">Columns to group together</param>
+        public GroupTransform(IHostEnvironment env, IDataView input, string groupKey, params string[] columns)
+            : this(env, new Arguments() { GroupKey = new[] { groupKey }, Column = columns }, input)
+        {
+        }
 
         public GroupTransform(IHostEnvironment env, Arguments args, IDataView input)
             : base(env, RegistrationName, input)
@@ -94,7 +113,7 @@ namespace Microsoft.ML.Runtime.Data
             Host.CheckValue(args, nameof(args));
             Host.CheckUserArg(Utils.Size(args.GroupKey) > 0, nameof(args.GroupKey), "There must be at least one group key");
 
-            _schema = new GroupSchema(Host, Source.Schema, args.GroupKey, args.Column ?? new string[0]);
+            _groupSchema = new GroupSchema(Host, Source.Schema, args.GroupKey, args.Column ?? new string[0]);
         }
 
         public static GroupTransform Create(IHostEnvironment env, ModelLoadContext ctx, IDataView input)
@@ -114,7 +133,7 @@ namespace Microsoft.ML.Runtime.Data
 
             // *** Binary format ***
             // (schema)
-            _schema = new GroupSchema(input.Schema, host, ctx);
+            _groupSchema = new GroupSchema(input.Schema, host, ctx);
         }
 
         public override void Save(ModelSaveContext ctx)
@@ -125,16 +144,16 @@ namespace Microsoft.ML.Runtime.Data
 
             // *** Binary format ***
             // (schema)
-            _schema.Save(ctx);
+            _groupSchema.Save(ctx);
         }
 
-        public override long? GetRowCount(bool lazy = true)
+        public override long? GetRowCount()
         {
             // We have no idea how many total rows we'll have.
             return null;
         }
 
-        public override ISchema Schema { get { return _schema; } }
+        public override Schema Schema => _groupSchema.AsSchema;
 
         protected override IRowCursor GetRowCursorCore(Func<int, bool> predicate, IRandom rand = null)
         {
@@ -163,10 +182,10 @@ namespace Microsoft.ML.Runtime.Data
 
         /// <summary>
         /// For group columns, the schema information is intact.
-        /// 
-        /// For keep columns, the type is Vector of original type and variable length. 
+        ///
+        /// For keep columns, the type is Vector of original type and variable length.
         /// The only metadata preserved is the KeyNames and IsNormalized.
-        /// 
+        ///
         /// All other columns are dropped.
         /// </summary>
         private sealed class GroupSchema : ISchema
@@ -188,6 +207,8 @@ namespace Microsoft.ML.Runtime.Data
 
             private readonly Dictionary<string, int> _columnNameMap;
 
+            public Schema AsSchema { get; }
+
             public GroupSchema(IExceptionContext ectx, ISchema inputSchema, string[] groupColumns, string[] keepColumns)
             {
                 Contracts.AssertValue(ectx);
@@ -206,6 +227,8 @@ namespace Microsoft.ML.Runtime.Data
 
                 _columnTypes = BuildColumnTypes(_input, KeepIds);
                 _columnNameMap = BuildColumnNameMap();
+
+                AsSchema = Schema.Create(this);
             }
 
             public GroupSchema(ISchema inputSchema, IHostEnvironment env, ModelLoadContext ctx)
@@ -241,6 +264,8 @@ namespace Microsoft.ML.Runtime.Data
 
                 _columnTypes = BuildColumnTypes(_input, KeepIds);
                 _columnNameMap = BuildColumnNameMap();
+
+                AsSchema = Schema.Create(this);
             }
 
             private Dictionary<string, int> BuildColumnNameMap()
@@ -395,16 +420,16 @@ namespace Microsoft.ML.Runtime.Data
         }
 
         /// <summary>
-        /// This cursor will create two cursors on the input data view: 
+        /// This cursor will create two cursors on the input data view:
         /// - The leading cursor will activate all the group columns, and will advance until it hits the end of the contiguous group.
-        /// - The trailing cursor will activate all the requested columns, and will go through the group 
-        ///     (as identified by the leading cursor), and aggregate the keep columns. 
-        /// 
+        /// - The trailing cursor will activate all the requested columns, and will go through the group
+        ///     (as identified by the leading cursor), and aggregate the keep columns.
+        ///
         /// The getters are as follows:
         /// - The group column getters are taken directly from the trailing cursor.
         /// - The keep column getters are provided by the aggregators.
         /// </summary>
-        public sealed class Cursor : RootCursorBase, IRowCursor
+        private sealed class Cursor : RootCursorBase, IRowCursor
         {
             /// <summary>
             /// This class keeps track of the previous group key and tests the current group key against the previous one.
@@ -414,7 +439,6 @@ namespace Microsoft.ML.Runtime.Data
                 public readonly Func<bool> IsSameKey;
 
                 private static Func<bool> MakeSameChecker<T>(IRow row, int col)
-                    where T : IEquatable<T>
                 {
                     T oldValue = default(T);
                     T newValue = default(T);
@@ -424,7 +448,16 @@ namespace Microsoft.ML.Runtime.Data
                         () =>
                         {
                             getter(ref newValue);
-                            bool result = first || oldValue.Equals(newValue);
+                            bool result;
+
+                            if ((typeof(IEquatable<T>).IsAssignableFrom(typeof(T))))
+                                result = oldValue.Equals(newValue);
+                            else if ((typeof(ReadOnlyMemory<char>).IsAssignableFrom(typeof(T))))
+                                result = ((ReadOnlyMemory<char>)(object)oldValue).Span.SequenceEqual(((ReadOnlyMemory<char>)(object)newValue).Span);
+                            else
+                                Contracts.Check(result = false, "Invalid type.");
+
+                            result = result || first;
                             oldValue = newValue;
                             first = false;
                             return result;
@@ -443,7 +476,7 @@ namespace Microsoft.ML.Runtime.Data
             }
 
             // REVIEW: potentially, there could be other aggregators.
-            // REVIEW: Currently, it always produces dense buffers. The anticipated use cases don't include many 
+            // REVIEW: Currently, it always produces dense buffers. The anticipated use cases don't include many
             // default values at the moment.
             /// <summary>
             /// This class handles the aggregation of one 'keep' column into a vector. It wraps around an <see cref="IRow"/>'s
@@ -520,7 +553,7 @@ namespace Microsoft.ML.Runtime.Data
 
             public override long Batch { get { return 0; } }
 
-            public ISchema Schema { get { return _parent.Schema; } }
+            public Schema Schema => _parent.Schema;
 
             public Cursor(GroupTransform parent, Func<int, bool> predicate)
                 : base(parent.Host)
@@ -528,7 +561,7 @@ namespace Microsoft.ML.Runtime.Data
                 Ch.AssertValue(predicate);
 
                 _parent = parent;
-                var schema = _parent._schema;
+                var schema = _parent._groupSchema;
                 _active = Utils.BuildArray(schema.ColumnCount, predicate);
                 _groupCount = schema.GroupIds.Length;
 
@@ -552,13 +585,13 @@ namespace Microsoft.ML.Runtime.Data
 
                 _groupCheckers = new GroupKeyColumnChecker[_groupCount];
                 for (int i = 0; i < _groupCount; i++)
-                    _groupCheckers[i] = new GroupKeyColumnChecker(_leadingCursor, _parent._schema.GroupIds[i]);
+                    _groupCheckers[i] = new GroupKeyColumnChecker(_leadingCursor, _parent._groupSchema.GroupIds[i]);
 
-                _aggregators = new KeepColumnAggregator[_parent._schema.KeepIds.Length];
+                _aggregators = new KeepColumnAggregator[_parent._groupSchema.KeepIds.Length];
                 for (int i = 0; i < _aggregators.Length; i++)
                 {
                     if (_active[i + _groupCount])
-                        _aggregators[i] = KeepColumnAggregator.Create(_trailingCursor, _parent._schema.KeepIds[i]);
+                        _aggregators[i] = KeepColumnAggregator.Create(_trailingCursor, _parent._groupSchema.KeepIds[i]);
                 }
             }
 
@@ -569,7 +602,7 @@ namespace Microsoft.ML.Runtime.Data
 
             public bool IsColumnActive(int col)
             {
-                _parent._schema.CheckColumnInRange(col);
+                _parent._groupSchema.CheckColumnInRange(col);
                 return _active[col];
             }
 
@@ -637,12 +670,12 @@ namespace Microsoft.ML.Runtime.Data
 
             public ValueGetter<TValue> GetGetter<TValue>(int col)
             {
-                _parent._schema.CheckColumnInRange(col);
+                _parent._groupSchema.CheckColumnInRange(col);
                 if (!_active[col])
                     throw Ch.ExceptParam(nameof(col), "Column #{0} is not active", col);
 
                 if (col < _groupCount)
-                    return _trailingCursor.GetGetter<TValue>(_parent._schema.GroupIds[col]);
+                    return _trailingCursor.GetGetter<TValue>(_parent._groupSchema.GroupIds[col]);
 
                 Ch.AssertValue(_aggregators[col - _groupCount]);
                 return _aggregators[col - _groupCount].GetGetter<TValue>(Ch);
@@ -652,7 +685,11 @@ namespace Microsoft.ML.Runtime.Data
 
     public static partial class GroupingOperations
     {
-        [TlcModule.EntryPoint(Name = "Transforms.CombinerByContiguousGroupId", Desc = GroupTransform.Summary, UserName = GroupTransform.UserName, ShortName = GroupTransform.ShortName)]
+        [TlcModule.EntryPoint(Name = "Transforms.CombinerByContiguousGroupId",
+            Desc = GroupTransform.Summary,
+            UserName = GroupTransform.UserName,
+            ShortName = GroupTransform.ShortName,
+            XmlInclude = new[] { @"<include file='../Microsoft.ML.Transforms/doc.xml' path='doc/members/member[@name=""Group""]/*' />" })]
         public static CommonOutputs.TransformOutput Group(IHostEnvironment env, GroupTransform.Arguments input)
         {
             Contracts.CheckValue(env, nameof(env));

@@ -9,11 +9,12 @@ using Microsoft.ML.Runtime.Data;
 namespace Microsoft.ML.Runtime.Internal.Utilities
 {
     /// <summary>
-    /// This is an interface for creating samples of a requested size from a stream of data of type <typeparamref name="T"/>. 
-    /// The sample is created in one pass by calling <see cref="Sample"/> for every data point in the stream. Implementations should have 
+    /// This is an interface for creating samples of a requested size from a stream of data of type <typeparamref name="T"/>.
+    /// The sample is created in one pass by calling <see cref="Sample"/> for every data point in the stream. Implementations should have
     /// a delegate for getting the next data point, which is invoked if the current data point should go into the reservoir.
     /// </summary>
-    public interface IReservoirSampler<T>
+    [BestFriend]
+    internal interface IReservoirSampler<T>
     {
         /// <summary>
         /// If the number of elements sampled is less than the reservoir size, this should return the number of elements sampled.
@@ -44,12 +45,13 @@ namespace Microsoft.ML.Runtime.Internal.Utilities
     }
 
     /// <summary>
-    /// This class produces a sample without replacement from a stream of data of type <typeparamref name="T"/>. 
-    /// It is instantiated with a delegate that gets the next data point, and builds a reservoir in one pass by calling <see cref="Sample"/> 
+    /// This class produces a sample without replacement from a stream of data of type <typeparamref name="T"/>.
+    /// It is instantiated with a delegate that gets the next data point, and builds a reservoir in one pass by calling <see cref="Sample"/>
     /// for every data point in the stream. In case the next data point does not get 'picked' into the reservoir, the delegate is not invoked.
-    /// Sampling is done according to the algorithm in this paper: <see href="http://epubs.siam.org/doi/pdf/10.1137/1.9781611972740.53"/>.
+    /// Sampling is done according to the algorithm in this paper: <a href="https://epubs.siam.org/doi/pdf/10.1137/1.9781611972740.53">https://epubs.siam.org/doi/pdf/10.1137/1.9781611972740.53</a>.
     /// </summary>
-    public sealed class ReservoirSamplerWithoutReplacement<T> : IReservoirSampler<T>
+    [BestFriend]
+    internal sealed class ReservoirSamplerWithoutReplacement<T> : IReservoirSampler<T>
     {
         // This array contains a cache of the elements composing the reservoir.
         private readonly T[] _cache;
@@ -117,12 +119,13 @@ namespace Microsoft.ML.Runtime.Internal.Utilities
     }
 
     /// <summary>
-    /// This class produces a sample with replacement from a stream of data of type <typeparamref name="T"/>. 
-    /// It is instantiated with a delegate that gets the next data point, and builds a reservoir in one pass by calling <see cref="Sample"/> 
+    /// This class produces a sample with replacement from a stream of data of type <typeparamref name="T"/>.
+    /// It is instantiated with a delegate that gets the next data point, and builds a reservoir in one pass by calling <see cref="Sample"/>
     /// for every data point in the stream. In case the next data point does not get 'picked' into the reservoir, the delegate is not invoked.
-    /// Sampling is done according to the algorithm in this paper: <see href="http://epubs.siam.org/doi/pdf/10.1137/1.9781611972740.53"/>.
+    /// Sampling is done according to the algorithm in this paper: <a href="https://epubs.siam.org/doi/pdf/10.1137/1.9781611972740.53">https://epubs.siam.org/doi/pdf/10.1137/1.9781611972740.53</a>.
     /// </summary>
-    public sealed class ReservoirSamplerWithReplacement<T> : IReservoirSampler<T>
+    [BestFriend]
+    internal sealed class ReservoirSamplerWithReplacement<T> : IReservoirSampler<T>
     {
         // This array contains pointers to the elements in the _cache array that are currently in the reservoir (may contain duplicates).
         private readonly int[] _reservoir;
@@ -237,7 +240,7 @@ namespace Microsoft.ML.Runtime.Internal.Utilities
         }
 
         /// <summary>
-        /// Gets a reservoir sample with replacement of the elements sampled so far. Users should not change the 
+        /// Gets a reservoir sample with replacement of the elements sampled so far. Users should not change the
         /// elements returned since multiple elements in the reservoir might be pointing to the same memory.
         /// </summary>
         public IEnumerable<T> GetSample()

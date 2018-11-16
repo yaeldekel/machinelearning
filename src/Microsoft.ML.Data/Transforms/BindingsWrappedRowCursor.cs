@@ -11,11 +11,11 @@ namespace Microsoft.ML.Runtime.Data
     /// inconvenient or inefficient to handle the "no output selected" case in their
     /// own implementation.
     /// </summary>
-    public sealed class BindingsWrappedRowCursor : SynchronizedCursorBase<IRowCursor>, IRowCursor
+    internal sealed class BindingsWrappedRowCursor : SynchronizedCursorBase<IRowCursor>, IRowCursor
     {
         private readonly ColumnBindingsBase _bindings;
 
-        public ISchema Schema { get { return _bindings; } }
+        public Schema Schema => _bindings.AsSchema;
 
         /// <summary>
         /// Creates a wrapped version of the cursor

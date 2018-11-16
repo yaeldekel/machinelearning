@@ -2,14 +2,15 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using Microsoft.ML.Runtime;
+using Microsoft.ML.Runtime.Internal.CpuMath;
+using Microsoft.ML.Runtime.Internal.Utilities;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Microsoft.ML.Runtime.Internal.CpuMath;
-using Microsoft.ML.Runtime.Internal.Utilities;
 
-namespace Microsoft.ML.Runtime.FastTree.Internal
+namespace Microsoft.ML.Trainers.FastTree.Internal
 {
 #if USE_SINGLE_PRECISION
     using FloatType = System.Single;
@@ -20,7 +21,7 @@ namespace Microsoft.ML.Runtime.FastTree.Internal
     /// <summary>
     /// Trains regression trees.
     /// </summary>
-    public class LeastSquaresRegressionTreeLearner : TreeLearner
+    public class LeastSquaresRegressionTreeLearner : TreeLearner, ILeafSplitStatisticsCalculator
     {
         // parameters
         protected readonly int MinDocsInLeaf;
@@ -103,7 +104,7 @@ namespace Microsoft.ML.Runtime.FastTree.Internal
         /// <param name="gainConfidenceLevel">Only consider a gain if its likelihood versus a random
         /// choice gain is above a certain value (so 0.95 would mean restricting to gains that have less
         /// than a 0.05 change of being generated randomly through choice of a random split).</param>
-        /// <param name="maxCategoricalGroupsPerNode">Maximum categorical split points to consider when splitting on a 
+        /// <param name="maxCategoricalGroupsPerNode">Maximum categorical split points to consider when splitting on a
         /// categorical feature.</param>
         /// <param name="maxCategoricalSplitPointPerNode"></param>
         /// <param name="bsrMaxTreeOutput">-1 if best step ranking is to be disabled, otherwise it
@@ -1201,5 +1202,12 @@ namespace Microsoft.ML.Runtime.FastTree.Internal
                     return -1;
             }
         }
+    }
+
+    internal interface ILeafSplitStatisticsCalculator
+    {
+        double CalculateSplittedLeafOutput(int count, double sumTargets, double sumWeights);
+
+        double GetLeafSplitGain(int count, double sumTargets, double sumWeights);
     }
 }

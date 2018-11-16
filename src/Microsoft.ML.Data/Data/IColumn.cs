@@ -13,18 +13,18 @@ namespace Microsoft.ML.Runtime.Data
     /// <summary>
     /// This interface is an analogy to <see cref="IRow"/> that encapsulates the contents of a single
     /// column.
-    /// 
+    ///
     /// Note that in the same sense that <see cref="IRow"/> is not thread safe, implementors of this interface
     /// by similar token must not be considered thread safe by users of the interface, and by the same token
     /// implementors should feel free to write their implementations with the expectation that only one thread
     /// will be calling it at a time.
-    /// 
+    ///
     /// Similarly, in the same sense that an <see cref="IRow"/> can have its values "change under it" by having
     /// the underlying cursor move, so too might this item have its values change under it, and they will if
     /// they were directly instantiated from a row.
-    /// 
+    ///
     /// Generally actual implementors of this interface should not implement this directly, but instead implement
-    /// <see cref="IColumn{T}"/>.
+    /// <see cref="IValueColumn{T}"/>.
     /// </summary>
     // REVIEW: It is possible we may want to make this ICounted, but let's not start with
     // that assumption. The use cases I have in mind are that we'll still, on the side, have an
@@ -55,7 +55,7 @@ namespace Microsoft.ML.Runtime.Data
 
         /// <summary>
         /// The value getter, as a <see cref="Delegate"/>. Implementators should just pass through
-        /// <see cref="IColumn{T}.GetGetter"/>.
+        /// <see cref="IValueColumn{T}.GetGetter"/>.
         /// </summary>
         /// <returns>The generic getter delegate</returns>
         Delegate GetGetter();
@@ -66,7 +66,7 @@ namespace Microsoft.ML.Runtime.Data
     /// </summary>
     /// <typeparam name="T">The type of values in this column. This should agree with the <see cref="ColumnType.RawType"/>
     /// field of <see name="IRowColumn.Type"/>.</typeparam>
-    public interface IColumn<T> : IColumn
+    public interface IValueColumn<T> : IColumn
     {
         new ValueGetter<T> GetGetter();
     }
@@ -98,16 +98,27 @@ namespace Microsoft.ML.Runtime.Data
         }
 
         /// <summary>
-        /// Wraps the metadata of a column as a row.
+        /// Exposes a single column in a schema. The column is considered inactive.
         /// </summary>
-        /// <param name="schema"></param>
-        /// <param name="col"></param>
-        /// <returns></returns>
-        public static IRow GetMetadataAsRow(ISchema schema, int col)
+        /// <param name="schema">The schema to get the data for</param>
+        /// <param name="col">The column to get</param>
+        /// <returns>A column with <see cref="IColumn.IsActive"/> false</returns>
+        public static IColumn GetColumn(ISchema schema, int col)
         {
             Contracts.CheckValue(schema, nameof(schema));
             Contracts.CheckParam(0 <= col && col < schema.ColumnCount, nameof(col));
-            return new MetadataRow(schema, col);
+
+            Func<ISchema, int, IColumn> func = GetColumnCore<int>;
+            return Utils.MarshalInvoke(func, schema.GetColumnType(col).RawType, schema, col);
+        }
+
+        private static IColumn GetColumnCore<T>(ISchema schema, int col)
+        {
+            Contracts.AssertValue(schema);
+            Contracts.Assert(0 <= col && col < schema.ColumnCount);
+            Contracts.Assert(schema.GetColumnType(col).RawType == typeof(T));
+
+            return new SchemaWrap<T>(schema, col);
         }
 
         /// <summary>
@@ -183,7 +194,7 @@ namespace Microsoft.ML.Runtime.Data
         /// <see cref="ICounted"/>, or if null, the output row will yield default values for those implementations,
         /// that is, a totally static row</param>
         /// <param name="columns">A set of row columns</param>
-        /// <returns>A row with items derived from</returns>
+        /// <returns>A row with items derived from <paramref name="columns"/></returns>
         public static IRow GetRow(ICounted counted, params IColumn[] columns)
         {
             Contracts.CheckValueOrNull(counted);
@@ -207,12 +218,12 @@ namespace Microsoft.ML.Runtime.Data
 
         private static IColumn CloneColumnCore<T>(IColumn column)
         {
-            Contracts.Assert(column is IColumn<T>);
+            Contracts.Assert(column is IValueColumn<T>);
             IRow meta = column.Metadata;
             if (meta != null)
                 meta = RowCursorUtils.CloneRow(meta);
 
-            var tcolumn = (IColumn<T>)column;
+            var tcolumn = (IValueColumn<T>)column;
             if (!tcolumn.IsActive)
                 return new InactiveImpl<T>(tcolumn.Name, meta, tcolumn.Type);
             T val = default(T);
@@ -223,22 +234,22 @@ namespace Microsoft.ML.Runtime.Data
         /// <summary>
         /// The implementation for a simple wrapping of an <see cref="IRow"/>.
         /// </summary>
-        private sealed class RowWrap<T> : IColumn<T>
+        private sealed class RowWrap<T> : IValueColumn<T>
         {
             private readonly IRow _row;
             private readonly int _col;
             private MetadataRow _meta;
 
-            public string Name { get { return _row.Schema.GetColumnName(_col); } }
-            public ColumnType Type { get { return _row.Schema.GetColumnType(_col); } }
-            public bool IsActive { get { return _row.IsColumnActive(_col); } }
+            public string Name => _row.Schema.GetColumnName(_col);
+            public ColumnType Type => _row.Schema.GetColumnType(_col);
+            public bool IsActive => _row.IsColumnActive(_col);
 
             public IRow Metadata
             {
                 get
                 {
                     if (_meta == null)
-                        Interlocked.CompareExchange(ref _meta, new MetadataRow(_row.Schema, _col), null);
+                        Interlocked.CompareExchange(ref _meta, new MetadataRow(_row.Schema, _col, x => true), null);
                     return _meta;
                 }
             }
@@ -254,14 +265,10 @@ namespace Microsoft.ML.Runtime.Data
             }
 
             Delegate IColumn.GetGetter()
-            {
-                return GetGetter();
-            }
+                => GetGetter();
 
             public ValueGetter<T> GetGetter()
-            {
-                return _row.GetGetter<T>(_col);
-            }
+                => _row.GetGetter<T>(_col);
         }
 
         /// <summary>
@@ -269,17 +276,54 @@ namespace Microsoft.ML.Runtime.Data
         /// </summary>
         private abstract class DefaultCounted : ICounted
         {
-            public long Position { get { return 0; } }
-            public long Batch { get { return 0; } }
+            public long Position => 0;
+            public long Batch => 0;
             public ValueGetter<UInt128> GetIdGetter()
-            {
-                return IdGetter;
-            }
+                => IdGetter;
 
             private static void IdGetter(ref UInt128 id)
+                => id = default;
+        }
+
+        /// <summary>
+        /// Simple wrapper for a schema column, considered inctive with no getter.
+        /// </summary>
+        /// <typeparam name="T">The type of the getter</typeparam>
+        private sealed class SchemaWrap<T> : IValueColumn<T>
+        {
+            private readonly ISchema _schema;
+            private readonly int _col;
+            private MetadataRow _meta;
+
+            public string Name => _schema.GetColumnName(_col);
+            public ColumnType Type => _schema.GetColumnType(_col);
+            public bool IsActive => false;
+
+            public IRow Metadata
             {
-                id = default(UInt128);
+                get
+                {
+                    if (_meta == null)
+                        Interlocked.CompareExchange(ref _meta, new MetadataRow(_schema, _col, x => true), null);
+                    return _meta;
+                }
             }
+
+            public SchemaWrap(ISchema schema, int col)
+            {
+                Contracts.AssertValue(schema);
+                Contracts.Assert(0 <= col && col < schema.ColumnCount);
+                Contracts.Assert(schema.GetColumnType(col).RawType == typeof(T));
+
+                _schema = schema;
+                _col = col;
+            }
+
+            Delegate IColumn.GetGetter()
+                => GetGetter();
+
+            public ValueGetter<T> GetGetter()
+                => throw Contracts.Except("Column not active");
         }
 
         /// <summary>
@@ -287,20 +331,29 @@ namespace Microsoft.ML.Runtime.Data
         /// column as an <see cref="IRow"/>. This class will cease to be necessary at the point when all
         /// metadata implementations are just simple <see cref="IRow"/>s.
         /// </summary>
-        private sealed class MetadataRow : DefaultCounted, IRow
+        public sealed class MetadataRow : IRow
         {
-            public ISchema Schema { get { return _schema; } }
+            public Schema Schema => _schemaImpl.AsSchema;
 
             private readonly ISchema _metaSchema;
             private readonly int _col;
-            private readonly SchemaImpl _schema;
+            private readonly SchemaImpl _schemaImpl;
 
             private readonly KeyValuePair<string, ColumnType>[] _map;
+
+            long ICounted.Position => 0;
+            long ICounted.Batch => 0;
+            ValueGetter<UInt128> ICounted.GetIdGetter()
+                => IdGetter;
+
+            private static void IdGetter(ref UInt128 id)
+                => id = default;
 
             private sealed class SchemaImpl : ISchema
             {
                 private readonly MetadataRow _parent;
                 private readonly Dictionary<string, int> _nameToCol;
+                public Schema AsSchema { get; }
 
                 public int ColumnCount { get { return _parent._map.Length; } }
 
@@ -311,6 +364,8 @@ namespace Microsoft.ML.Runtime.Data
                     _nameToCol = new Dictionary<string, int>(ColumnCount);
                     for (int i = 0; i < _parent._map.Length; ++i)
                         _nameToCol[_parent._map[i].Key] = i;
+
+                    AsSchema = Data.Schema.Create(this);
                 }
 
                 public string GetColumnName(int col)
@@ -347,15 +402,16 @@ namespace Microsoft.ML.Runtime.Data
                 }
             }
 
-            public MetadataRow(ISchema schema, int col)
+            public MetadataRow(ISchema schema, int col, Func<string, bool> takeMetadata)
             {
-                Contracts.AssertValue(schema);
-                Contracts.Assert(0 <= col && col < schema.ColumnCount);
+                Contracts.CheckValue(schema, nameof(schema));
+                Contracts.CheckParam(0 <= col && col < schema.ColumnCount, nameof(col));
+                Contracts.CheckValue(takeMetadata, nameof(takeMetadata));
 
                 _metaSchema = schema;
                 _col = col;
-                _map = _metaSchema.GetMetadataTypes(_col).ToArray();
-                _schema = new SchemaImpl(this);
+                _map = _metaSchema.GetMetadataTypes(_col).Where(x => takeMetadata(x.Key)).ToArray();
+                _schemaImpl = new SchemaImpl(this);
             }
 
             public bool IsColumnActive(int col)
@@ -377,15 +433,11 @@ namespace Microsoft.ML.Runtime.Data
         /// This is used for a few <see cref="IColumn"/> implementations that need to store their own name,
         /// metadata, and type themselves.
         /// </summary>
-        private abstract class SimpleColumnBase<T> : IColumn<T>
+        private abstract class SimpleColumnBase<T> : IValueColumn<T>
         {
-            private readonly IRow _meta;
-            private readonly string _name;
-            private readonly ColumnType _type;
-
-            public string Name { get { return _name; } }
-            public IRow Metadata { get { return _meta; } }
-            public ColumnType Type { get { return _type; } }
+            public string Name { get; }
+            public IRow Metadata { get; }
+            public ColumnType Type { get; }
             public abstract bool IsActive { get; }
 
             public SimpleColumnBase(string name, IRow meta, ColumnType type)
@@ -395,9 +447,9 @@ namespace Microsoft.ML.Runtime.Data
                 Contracts.CheckValue(type, nameof(type));
                 Contracts.CheckParam(type.RawType == typeof(T), nameof(type), "Mismatch between CLR type and column type");
 
-                _name = name;
-                _meta = meta;
-                _type = type;
+                Name = name;
+                Metadata = meta;
+                Type = type;
             }
 
             Delegate IColumn.GetGetter()
@@ -427,7 +479,7 @@ namespace Microsoft.ML.Runtime.Data
         {
             private readonly T _value;
 
-            public override bool IsActive { get { return true; } }
+            public override bool IsActive => true;
 
             public ConstOneImpl(string name, IRow meta, ColumnType type, T value)
                 : base(name, meta, type)
@@ -474,7 +526,7 @@ namespace Microsoft.ML.Runtime.Data
         {
             private readonly ValueGetter<T> _getter;
 
-            public override bool IsActive { get { return _getter != null; } }
+            public override bool IsActive => _getter != null;
 
             public GetterImpl(string name, IRow meta, ColumnType type, ValueGetter<T> getter)
                 : base(name, meta, type)
@@ -495,14 +547,14 @@ namespace Microsoft.ML.Runtime.Data
         /// </summary>
         private sealed class RowColumnRow : IRow
         {
-            private readonly static DefaultCountedImpl _defCount = new DefaultCountedImpl();
+            private static readonly DefaultCountedImpl _defCount = new DefaultCountedImpl();
             private readonly ICounted _counted;
             private readonly IColumn[] _columns;
             private readonly SchemaImpl _schema;
 
-            public ISchema Schema { get { return _schema; } }
-            public long Position { get { return _counted.Position; } }
-            public long Batch { get { return _counted.Batch; } }
+            public Schema Schema => _schema.AsSchema;
+            public long Position => _counted.Position;
+            public long Batch => _counted.Batch;
 
             public RowColumnRow(ICounted counted, IColumn[] columns)
             {
@@ -516,7 +568,7 @@ namespace Microsoft.ML.Runtime.Data
             public ValueGetter<TValue> GetGetter<TValue>(int col)
             {
                 Contracts.CheckParam(IsColumnActive(col), nameof(col), "requested column not active");
-                var rowCol = _columns[col] as IColumn<TValue>;
+                var rowCol = _columns[col] as IValueColumn<TValue>;
                 if (rowCol == null)
                     throw Contracts.Except("Invalid TValue: '{0}'", typeof(TValue));
                 return rowCol.GetGetter();
@@ -538,7 +590,9 @@ namespace Microsoft.ML.Runtime.Data
                 private readonly RowColumnRow _parent;
                 private readonly Dictionary<string, int> _nameToIndex;
 
-                public int ColumnCount { get { return _parent._columns.Length; } }
+                public Schema AsSchema { get; }
+
+                public int ColumnCount => _parent._columns.Length;
 
                 public SchemaImpl(RowColumnRow parent)
                 {
@@ -547,6 +601,7 @@ namespace Microsoft.ML.Runtime.Data
                     _nameToIndex = new Dictionary<string, int>();
                     for (int i = 0; i < _parent._columns.Length; ++i)
                         _nameToIndex[_parent._columns[i].Name] = i;
+                    AsSchema = Data.Schema.Create(this);
                 }
 
                 public void GetMetadata<TValue>(string kind, int col, ref TValue value)

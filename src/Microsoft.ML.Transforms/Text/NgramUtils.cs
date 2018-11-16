@@ -68,17 +68,18 @@ namespace Microsoft.ML.Runtime.Data
             _queue.Clear();
         }
 
-        public bool AddNgrams(ref VBuffer<uint> src, int icol, uint keyMax)
+        public bool AddNgrams(in VBuffer<uint> src, int icol, uint keyMax)
         {
             Contracts.Assert(icol >= 0);
             Contracts.Assert(keyMax > 0);
 
+            var srcValues = src.GetValues();
             uint curKey = 0;
             if (src.IsDense)
             {
                 for (int i = 0; i < src.Length; i++)
                 {
-                    curKey = src.Values[i];
+                    curKey = srcValues[i];
                     if (curKey > keyMax)
                         curKey = 0;
 
@@ -92,13 +93,14 @@ namespace Microsoft.ML.Runtime.Data
             else
             {
                 var queueSize = _queue.Capacity;
+                var srcIndices = src.GetIndices();
 
                 int iindex = 0;
                 for (int i = 0; i < src.Length; i++)
                 {
-                    if (iindex < src.Count && i == src.Indices[iindex])
+                    if (iindex < srcIndices.Length && i == srcIndices[iindex])
                     {
-                        curKey = src.Values[iindex];
+                        curKey = srcValues[iindex];
                         if (curKey > keyMax)
                             curKey = 0;
                         iindex++;
@@ -134,7 +136,7 @@ namespace Microsoft.ML.Runtime.Data
             _bldr.GetResult(ref dst);
         }
 
-        // Returns false if there is no need to process more ngrams. 
+        // Returns false if there is no need to process more ngrams.
         private bool ProcessNgrams(int icol)
         {
             Contracts.Assert(_queue.Count > 0);
@@ -171,8 +173,8 @@ namespace Microsoft.ML.Runtime.Data
             return true;
         }
 
-        // Uses DFS. When called with i and skips, it assumes that the 
-        // first i terms in the _ngram array are already populated using "skips" skips, 
+        // Uses DFS. When called with i and skips, it assumes that the
+        // first i terms in the _ngram array are already populated using "skips" skips,
         // and it adds the (i+1)st term. It then recursively calls ProcessSkipNgrams
         // to add the next term.
         private bool ProcessSkipNgrams(int icol, int i, int skips)

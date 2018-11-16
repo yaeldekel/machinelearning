@@ -13,18 +13,19 @@ using Microsoft.ML.Runtime.Data;
 using Microsoft.ML.Runtime.Internal.Utilities;
 using Microsoft.ML.Runtime.Model;
 using Microsoft.ML.Runtime.EntryPoints;
+using Microsoft.ML.Transforms.Text;
 
-[assembly: LoadableClass(NgramTransform.Summary, typeof(NgramTransform), typeof(NgramTransform.Arguments), typeof(SignatureDataTransform),
+[assembly: LoadableClass(NgramCountingTransformer.Summary, typeof(NgramCountingTransformer), typeof(NgramCountingTransformer.Arguments), typeof(SignatureDataTransform),
     "Ngram Transform", "NgramTransform", "Ngram")]
 
-[assembly: LoadableClass(NgramTransform.Summary, typeof(NgramTransform), null, typeof(SignatureLoadDataTransform),
-    "Ngram Transform", NgramTransform.LoaderSignature)]
+[assembly: LoadableClass(NgramCountingTransformer.Summary, typeof(NgramCountingTransformer), null, typeof(SignatureLoadDataTransform),
+    "Ngram Transform", NgramCountingTransformer.LoaderSignature)]
 
-namespace Microsoft.ML.Runtime.Data
+namespace Microsoft.ML.Transforms.Text
 {
     using Conditional = System.Diagnostics.ConditionalAttribute;
 
-    public sealed class NgramTransform : OneToOneTransformBase
+    public sealed class NgramCountingTransformer : OneToOneTransformBase
     {
         /// <summary>
         /// Weighting criteria: a statistical measure used to evaluate how important a word is to a document in a corpus.
@@ -180,7 +181,7 @@ namespace Microsoft.ML.Runtime.Data
                 Contracts.Assert(Enum.IsDefined(typeof(WeightingCriteria), Weighting));
                 ctx.Writer.Write((int)Weighting);
                 Contracts.Assert(Utils.Size(NonEmptyLevels) == NgramLength);
-                ctx.Writer.WriteBoolBytesNoCount(NonEmptyLevels, NgramLength);
+                ctx.Writer.WriteBoolBytesNoCount(NonEmptyLevels);
             }
         }
 
@@ -200,7 +201,8 @@ namespace Microsoft.ML.Runtime.Data
                 verWrittenCur: 0x00010002, // Add support for TF-IDF
                 verReadableCur: 0x00010002,
                 verWeCanReadBack: 0x00010001,
-                loaderSignature: LoaderSignature);
+                loaderSignature: LoaderSignature,
+                loaderAssemblyName: typeof(NgramCountingTransformer).Assembly.FullName);
         }
 
         private readonly VectorType[] _types;
@@ -221,7 +223,7 @@ namespace Microsoft.ML.Runtime.Data
         /// <summary>
         /// Public constructor corresponding to SignatureDataTransform.
         /// </summary>
-        public NgramTransform(IHostEnvironment env, Arguments args, IDataView input)
+        public NgramCountingTransformer(IHostEnvironment env, Arguments args, IDataView input)
             : base(env, RegistrationName, Contracts.CheckRef(args, nameof(args)).Column, input, TestType)
         {
             Host.AssertNonEmpty(Infos);
@@ -236,7 +238,7 @@ namespace Microsoft.ML.Runtime.Data
             InitColumnTypeAndMetadata(out _types, out _slotNamesTypes);
         }
 
-        private NgramTransform(IHost host, ModelLoadContext ctx, IDataView input)
+        private NgramCountingTransformer(IHost host, ModelLoadContext ctx, IDataView input)
             : base(host, ctx, input, TestType)
         {
             Host.AssertValue(ctx);
@@ -268,7 +270,7 @@ namespace Microsoft.ML.Runtime.Data
             InitColumnTypeAndMetadata(out _types, out _slotNamesTypes);
         }
 
-        public static NgramTransform Create(IHostEnvironment env, ModelLoadContext ctx, IDataView input)
+        public static NgramCountingTransformer Create(IHostEnvironment env, ModelLoadContext ctx, IDataView input)
         {
             Contracts.CheckValue(env, nameof(env));
             var h = env.Register(RegistrationName);
@@ -283,7 +285,7 @@ namespace Microsoft.ML.Runtime.Data
                     // <remainder handled in ctors>
                     int cbFloat = ctx.Reader.ReadInt32();
                     ch.CheckDecode(cbFloat == sizeof(Float));
-                    return new NgramTransform(h, ctx, input);
+                    return new NgramCountingTransformer(h, ctx, input);
                 });
         }
 
@@ -303,7 +305,7 @@ namespace Microsoft.ML.Runtime.Data
 
             ctx.Writer.Write(sizeof(Float));
             SaveBase(ctx);
-            var ngramsNames = default(VBuffer<DvText>);
+            var ngramsNames = default(VBuffer<ReadOnlyMemory<char>>);
             for (int i = 0; i < _exes.Length; i++)
             {
                 _exes[i].Save(ctx);
@@ -313,14 +315,15 @@ namespace Microsoft.ML.Runtime.Data
                 if (_slotNamesTypes[i] != null)
                 {
                     GetSlotNames(i, ref ngramsNames);
-                    Host.Assert(_ngramMaps[i].Count == ngramsNames.Count);
+                    Host.Assert(_ngramMaps[i].Count == ngramsNames.GetValues().Length);
                     Host.Assert(ngramsNames.IsDense);
                     ctx.SaveTextStream(string.Format("{0}-ngrams.txt", Infos[i].Name),
                         writer =>
                         {
-                            writer.WriteLine("# Number of Ngrams terms = {0}", ngramsNames.Count);
-                            for (int j = 0; j < ngramsNames.Count; j++)
-                                writer.WriteLine("{0}\t{1}", j, ngramsNames.Values[j]);
+                            var explicitNgramNames = ngramsNames.GetValues();
+                            writer.WriteLine("# Number of Ngrams terms = {0}", explicitNgramNames.Length);
+                            for (int j = 0; j < explicitNgramNames.Length; j++)
+                                writer.WriteLine("{0}\t{1}", j, explicitNgramNames[j]);
                         });
                 }
             }
@@ -348,7 +351,14 @@ namespace Microsoft.ML.Runtime.Data
             var md = Metadata;
             for (int iinfo = 0; iinfo < _exes.Length; iinfo++)
             {
-                types[iinfo] = new VectorType(NumberType.Float, _ngramMaps[iinfo].Count);
+                var vectorSize = _ngramMaps[iinfo].Count;
+                if (vectorSize == 0)
+                {
+                    // If we the ngram map is empty, we should output the fixed-size vector of size 0. This is not a
+                    // valid VectorType (it would be considered variable), so we make it size 1 in this case.
+                    vectorSize = 1;
+                }
+                types[iinfo] = new VectorType(NumberType.Float, vectorSize);
                 var info = Infos[iinfo];
                 if (!Source.Schema.HasKeyNames(info.Source, info.TypeSrc.ItemType.KeyCount))
                     continue;
@@ -358,7 +368,7 @@ namespace Microsoft.ML.Runtime.Data
                     if (_ngramMaps[iinfo].Count > 0)
                     {
                         slotNamesTypes[iinfo] = new VectorType(TextType.Instance, _ngramMaps[iinfo].Count);
-                        bldr.AddGetter<VBuffer<DvText>>(MetadataUtils.Kinds.SlotNames,
+                        bldr.AddGetter<VBuffer<ReadOnlyMemory<char>>>(MetadataUtils.Kinds.SlotNames,
                             slotNamesTypes[iinfo], GetSlotNames);
                     }
                 }
@@ -366,7 +376,7 @@ namespace Microsoft.ML.Runtime.Data
             md.Seal();
         }
 
-        private void GetSlotNames(int iinfo, ref VBuffer<DvText> dst)
+        private void GetSlotNames(int iinfo, ref VBuffer<ReadOnlyMemory<char>> dst)
         {
             Host.Assert(0 <= iinfo && iinfo < Infos.Length);
             Host.Assert(_slotNamesTypes[iinfo] != null);
@@ -374,9 +384,9 @@ namespace Microsoft.ML.Runtime.Data
             var keyCount = Infos[iinfo].TypeSrc.ItemType.KeyCount;
             Host.Assert(Source.Schema.HasKeyNames(Infos[iinfo].Source, keyCount));
 
-            var unigramNames = new VBuffer<DvText>();
+            var unigramNames = new VBuffer<ReadOnlyMemory<char>>();
 
-            // Get the key values of the unigrams. 
+            // Get the key values of the unigrams.
             Source.Schema.GetMetadata(MetadataUtils.Kinds.KeyValues, Infos[iinfo].Source, ref unigramNames);
             Host.Check(unigramNames.Length == keyCount);
 
@@ -397,13 +407,13 @@ namespace Microsoft.ML.Runtime.Data
                 // Get the unigrams composing the current ngram.
                 ComposeNgramString(ngram, n, sb, keyCount,
                     unigramNames.GetItemOrDefault);
-                values[slot] = new DvText(sb.ToString());
+                values[slot] = sb.ToString().AsMemory();
             }
 
-            dst = new VBuffer<DvText>(ngramCount, values, dst.Indices);
+            dst = new VBuffer<ReadOnlyMemory<char>>(ngramCount, values, dst.Indices);
         }
 
-        private delegate void TermGetter(int index, ref DvText term);
+        private delegate void TermGetter(int index, ref ReadOnlyMemory<char> term);
 
         private void ComposeNgramString(uint[] ngram, int count, StringBuilder sb, int keyCount, TermGetter termGetter)
         {
@@ -412,7 +422,7 @@ namespace Microsoft.ML.Runtime.Data
             Host.Assert(keyCount > 0);
 
             sb.Clear();
-            DvText term = default(DvText);
+            ReadOnlyMemory<char> term = default;
             string sep = "";
             for (int iterm = 0; iterm < count; iterm++)
             {
@@ -424,7 +434,7 @@ namespace Microsoft.ML.Runtime.Data
                 else
                 {
                     termGetter((int)unigram - 1, ref term);
-                    term.AddToStringBuilder(sb);
+                    sb.AppendMemory(term);
                 }
             }
         }
@@ -493,7 +503,7 @@ namespace Microsoft.ML.Runtime.Data
                 invDocFreqs = new double[Infos.Length][];
 
                 long totalDocs = 0;
-                Double rowCount = trainingData.GetRowCount(true) ?? Double.NaN;
+                Double rowCount = trainingData.GetRowCount() ?? Double.NaN;
                 var buffers = new VBuffer<float>[Infos.Length];
                 pch.SetHeader(new ProgressHeader(new[] { "Total n-grams" }, new[] { "documents" }),
                     e => e.SetProgress(0, totalDocs, rowCount));
@@ -511,7 +521,7 @@ namespace Microsoft.ML.Runtime.Data
                             if (_exes[iinfo].RequireIdf())
                                 helpers[iinfo].Reset();
 
-                            helpers[iinfo].AddNgrams(ref src[iinfo], 0, keyCount);
+                            helpers[iinfo].AddNgrams(in src[iinfo], 0, keyCount);
                             if (_exes[iinfo].RequireIdf())
                             {
                                 int totalNgrams = counts[iinfo].Sum();
@@ -648,7 +658,7 @@ namespace Microsoft.ML.Runtime.Data
                             if (!bldr.IsEmpty)
                             {
                                 bldr.Reset();
-                                bldr.AddNgrams(ref src, 0, keyCount);
+                                bldr.AddNgrams(in src, 0, keyCount);
                                 bldr.GetResult(ref dst);
                                 VBufferUtils.Apply(ref dst, (int i, ref Float v) => v = (Float)(v * _invDocFreqs[iinfo][i]));
                             }
@@ -665,7 +675,7 @@ namespace Microsoft.ML.Runtime.Data
                             if (!bldr.IsEmpty)
                             {
                                 bldr.Reset();
-                                bldr.AddNgrams(ref src, 0, keyCount);
+                                bldr.AddNgrams(in src, 0, keyCount);
                                 bldr.GetResult(ref dst);
                                 VBufferUtils.Apply(ref dst, (int i, ref Float v) => v = v >= 1 ? (Float)_invDocFreqs[iinfo][i] : 0);
                             }
@@ -681,7 +691,7 @@ namespace Microsoft.ML.Runtime.Data
                             if (!bldr.IsEmpty)
                             {
                                 bldr.Reset();
-                                bldr.AddNgrams(ref src, 0, keyCount);
+                                bldr.AddNgrams(in src, 0, keyCount);
                                 bldr.GetResult(ref dst);
                             }
                             else

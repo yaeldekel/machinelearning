@@ -185,7 +185,6 @@ namespace Microsoft.ML.Runtime.Data
                     throw _host.ExceptParam(nameof(view), "View has {0} rows, we cannot transpose with more than {1}", rowCount, Utils.ArrayMaxSize);
                 RowCount = (int)rowCount;
                 _tschema = new SchemaImpl(this);
-                ch.Done();
             }
         }
 
@@ -261,7 +260,7 @@ namespace Microsoft.ML.Runtime.Data
         // we are still and will likely forever remain in a state where only a few specialized
         // operations make use of the transpose dataview, with many operations instead being
         // handled in the standard row-wise fashion.
-        public ISchema Schema { get { return _view.Schema; } }
+        public Schema Schema => _view.Schema;
 
         public bool CanShuffle { get { return _view.CanShuffle; } }
 
@@ -275,7 +274,7 @@ namespace Microsoft.ML.Runtime.Data
             return _view.GetRowCursorSet(out consolidator, predicate, n, rand);
         }
 
-        public long? GetRowCount(bool lazy = true)
+        public long? GetRowCount()
         {
             // Not a passthrough.
             return RowCount;
@@ -288,7 +287,9 @@ namespace Microsoft.ML.Runtime.Data
             private readonly IExceptionContext _ectx;
             private readonly VectorType[] _slotTypes;
 
-            private ISchema InputSchema { get { return _parent._view.Schema; } }
+            private Schema InputSchema { get { return _parent._view.Schema; } }
+
+            public Schema AsSchema { get; }
 
             public int ColumnCount { get { return InputSchema.ColumnCount; } }
 
@@ -307,6 +308,8 @@ namespace Microsoft.ML.Runtime.Data
                     _ectx.Assert(ctype.IsPrimitive);
                     _slotTypes[c] = new VectorType(ctype.AsPrimitive, _parent.RowCount);
                 }
+
+                AsSchema = Data.Schema.Create(this);
             }
 
             public bool TryGetColumnIndex(string name, out int col)
@@ -458,7 +461,7 @@ namespace Microsoft.ML.Runtime.Data
                                     len++;
                                     Ch.Assert(len <= _len);
                                     getter(ref value);
-                                    if (isDefault(ref value))
+                                    if (isDefault(in value))
                                         continue;
                                     Utils.EnsureSize(ref indices, ++count);
                                     indices[count - 1] = len;
@@ -501,8 +504,25 @@ namespace Microsoft.ML.Runtime.Data
             private T[][] _values;       // Working intermediate value buffers.
             private int[] _counts;       // Working intermediate count buffers.
 
-            // The transposed contents of _colStored.
-            private VBuffer<T>[] _cbuff; // Working intermediate column-wise buffer.
+            private struct ColumnBufferStorage
+            {
+                // The transposed contents of _colStored.
+                public VBuffer<T> Buffer;
+
+                // These two arrays are the "cached" arrays inside of the Buffer
+                // to be swapped between the _cbuff and _values/_indices.
+                public readonly T[] Values;
+                public readonly int[] Indices;
+
+                public ColumnBufferStorage(VBuffer<T> buffer, T[] values, int[] indices)
+                {
+                    Buffer = buffer;
+                    Values = values;
+                    Indices = indices;
+                }
+            }
+
+            private ColumnBufferStorage[] _cbuff; // Working intermediate column-wise buffer.
 
             // Variables to track current cursor position.
             private int _colStored;      // The current column of the source data view actually stored in the intermediate buffers.
@@ -564,7 +584,7 @@ namespace Microsoft.ML.Runtime.Data
                 var type = _view.Schema.GetColumnType(_colCurr);
                 Ch.Assert(type.ItemType.RawType == typeof(T));
                 Ch.Assert(type.ValueCount > 0);
-                RefPredicate<T> isDefault = Conversion.Conversions.Instance.GetIsDefaultPredicate<T>(type.ItemType);
+                InPredicate<T> isDefault = Conversion.Conversions.Instance.GetIsDefaultPredicate<T>(type.ItemType);
                 int vecLen = type.ValueCount;
                 int maxPossibleSize = _rbuff.Length * vecLen;
                 const int sparseThresholdRatio = 5;
@@ -613,24 +633,26 @@ namespace Microsoft.ML.Runtime.Data
                                         int rowNum = offset + r;
                                         var rbuff = _rbuff[r];
 
+                                        var rbuffValues = rbuff.GetValues();
                                         if (rbuff.IsDense)
                                         {
                                             // Store it as sparse. We will densify later, if we must.
-                                            if (!isDefault(ref rbuff.Values[s]))
+                                            if (!isDefault(in rbuffValues[s]))
                                             {
                                                 indices[_counts[s]] = rowNum;
-                                                values[_counts[s]++] = rbuff.Values[s];
+                                                values[_counts[s]++] = rbuffValues[s];
                                             }
                                         }
                                         else
                                         {
+                                            var rbuffIndices = rbuff.GetIndices();
                                             int ii = _rbuffIndices[r];
-                                            if (ii < rbuff.Count && rbuff.Indices[ii] == s)
+                                            if (ii < rbuffIndices.Length && rbuffIndices[ii] == s)
                                             {
-                                                if (!isDefault(ref rbuff.Values[ii]))
+                                                if (!isDefault(in rbuffValues[ii]))
                                                 {
                                                     indices[_counts[s]] = rowNum;
-                                                    values[_counts[s]++] = rbuff.Values[ii];
+                                                    values[_counts[s]++] = rbuffValues[ii];
                                                 }
                                                 _rbuffIndices[r]++;
                                             }
@@ -649,8 +671,8 @@ namespace Microsoft.ML.Runtime.Data
                                 for (int r = 0; r < irbuff; ++r)
                                 {
                                     var rbuff = _rbuff[r];
-                                    if (rbuff.Count > 0)
-                                        heap.Add(new KeyValuePair<int, int>(rbuff.IsDense ? 0 : rbuff.Indices[0], r));
+                                    if (rbuff.GetValues().Length > 0)
+                                        heap.Add(new KeyValuePair<int, int>(rbuff.IsDense ? 0 : rbuff.GetIndices()[0], r));
                                 }
                                 while (heap.Count > 0)
                                 {
@@ -663,12 +685,14 @@ namespace Microsoft.ML.Runtime.Data
                                         values = _values[s];
                                     }
                                     var rbuff = _rbuff[pair.Value];
+                                    var rbuffValues = rbuff.GetValues();
+                                    var rbuffIndices = rbuff.GetIndices();
                                     int ii = rbuff.IsDense ? s : _rbuffIndices[pair.Value]++;
-                                    Ch.Assert(rbuff.IsDense || rbuff.Indices[ii] == s);
+                                    Ch.Assert(rbuff.IsDense || rbuffIndices[ii] == s);
                                     indices[_counts[s]] = pair.Value + offset;
-                                    values[_counts[s]++] = rbuff.Values[ii];
-                                    if (++ii < rbuff.Count) // Still more stuff. Add another followup item to the heap.
-                                        heap.Add(new KeyValuePair<int, int>(rbuff.IsDense ? s + 1 : rbuff.Indices[ii], pair.Value));
+                                    values[_counts[s]++] = rbuffValues[ii];
+                                    if (++ii < rbuffValues.Length) // Still more stuff. Add another followup item to the heap.
+                                        heap.Add(new KeyValuePair<int, int>(rbuff.IsDense ? s + 1 : rbuffIndices[ii], pair.Value));
                                 }
                             }
                             Array.Clear(_rbuffIndices, 0, irbuff);
@@ -681,7 +705,7 @@ namespace Microsoft.ML.Runtime.Data
                         int idx = checked((int)cursor.Position);
                         Ch.Assert(0 <= idx && idx < _len);
                         getter(ref _rbuff[irbuff]);
-                        countSum += _rbuff[irbuff].Count;
+                        countSum += _rbuff[irbuff].GetValues().Length;
                         if (++irbuff == _rbuff.Length)
                             copyPhase();
                     }
@@ -697,20 +721,24 @@ namespace Microsoft.ML.Runtime.Data
                 Utils.EnsureSize(ref _cbuff, vecLen);
                 for (int s = 0; s < vecLen; ++s)
                 {
-                    var temp = new VBuffer<T>(_len, _counts[s], _values[s], _indices[s]);
-                    if (temp.Count < _len / 2)
+                    int count = _counts[s];
+                    T[] values = _values[s];
+                    int[] indices = _indices[s];
+                    var temp = new VBuffer<T>(_len, count, values, indices);
+                    if (count < _len / 2)
                     {
                         // Already sparse enough, I guess. Swap out the arrays.
-                        Utils.Swap(ref temp, ref _cbuff[s]);
-                        _indices[s] = temp.Indices ?? new int[_len];
-                        _values[s] = temp.Values ?? new T[_len];
+                        ColumnBufferStorage existingBuffer = _cbuff[s];
+                        _cbuff[s] = new ColumnBufferStorage(temp, values, indices);
+                        _indices[s] = existingBuffer.Indices ?? new int[_len];
+                        _values[s] = existingBuffer.Values ?? new T[_len];
                         Ch.Assert(_indices[s].Length == _len);
                         Ch.Assert(_values[s].Length == _len);
                     }
                     else
                     {
                         // Not dense enough. Densify temp into _cbuff[s]. Don't swap the arrays.
-                        temp.CopyToDense(ref _cbuff[s]);
+                        temp.CopyToDense(ref _cbuff[s].Buffer);
                     }
                 }
                 _colStored = _colCurr;
@@ -733,8 +761,8 @@ namespace Microsoft.ML.Runtime.Data
             {
                 Ch.Check(IsGood, "Cannot get values in the cursor's current state");
                 EnsureValid();
-                Ch.Assert(0 <= _slotCurr && _slotCurr < Utils.Size(_cbuff) && _cbuff[_slotCurr].Length == _len);
-                _cbuff[_slotCurr].CopyTo(ref dst);
+                Ch.Assert(0 <= _slotCurr && _slotCurr < Utils.Size(_cbuff) && _cbuff[_slotCurr].Buffer.Length == _len);
+                _cbuff[_slotCurr].Buffer.CopyTo(ref dst);
             }
 
             protected override ValueGetter<VBuffer<T>> GetGetterCore()
@@ -769,7 +797,7 @@ namespace Microsoft.ML.Runtime.Data
             private readonly SchemaImpl _schema;
 
             private readonly IHost _host;
-            public ISchema Schema { get { return _schema; } }
+            public Schema Schema => _schema.AsSchema;
 
             public bool CanShuffle { get { return _input.CanShuffle; } }
 
@@ -811,9 +839,9 @@ namespace Microsoft.ML.Runtime.Data
                 _schema = new SchemaImpl(this, nameToCol);
             }
 
-            public long? GetRowCount(bool lazy = true)
+            public long? GetRowCount()
             {
-                return _input.GetRowCount(lazy);
+                return _input.GetRowCount();
             }
 
             /// <summary>
@@ -896,6 +924,8 @@ namespace Microsoft.ML.Runtime.Data
                 private readonly DataViewSlicer _slicer;
                 private readonly Dictionary<string, int> _nameToCol;
 
+                public Schema AsSchema { get; }
+
                 public override int ColumnCount { get { return _slicer._colToSplitIndex.Length; } }
 
                 public SchemaImpl(DataViewSlicer slicer, Dictionary<string, int> nameToCol)
@@ -904,6 +934,7 @@ namespace Microsoft.ML.Runtime.Data
                     Contracts.AssertValue(nameToCol);
                     _slicer = slicer;
                     _nameToCol = nameToCol;
+                    AsSchema = Data.Schema.Create(this);
                 }
 
                 public override bool TryGetColumnIndex(string name, out int col)
@@ -978,6 +1009,8 @@ namespace Microsoft.ML.Runtime.Data
 
                 public int SrcCol { get { return _col; } }
 
+                public abstract Schema AsSchema { get; }
+
                 protected Splitter(IDataView view, int col)
                 {
                     Contracts.AssertValue(view);
@@ -1041,7 +1074,6 @@ namespace Microsoft.ML.Runtime.Data
                 }
 
                 #region ISchema implementation
-
                 // Subclasses should implement ColumnCount and GetColumnType.
                 public override bool TryGetColumnIndex(string name, out int col)
                 {
@@ -1062,8 +1094,6 @@ namespace Microsoft.ML.Runtime.Data
                     Contracts.CheckParam(0 <= col && col < ColumnCount, nameof(col));
                     return _view.Schema.GetColumnName(SrcCol);
                 }
-
-                public override abstract ColumnType GetColumnType(int col);
                 #endregion
 
                 private abstract class RowBase<TSplitter> : IRow
@@ -1072,7 +1102,7 @@ namespace Microsoft.ML.Runtime.Data
                     protected readonly TSplitter Parent;
                     protected readonly IRow Input;
 
-                    public ISchema Schema => Parent;
+                    public Schema Schema => Parent.AsSchema;
                     public long Position => Input.Position;
                     public long Batch => Input.Batch;
 
@@ -1104,10 +1134,13 @@ namespace Microsoft.ML.Runtime.Data
                 {
                     public override int ColumnCount => 1;
 
+                    public override Schema AsSchema { get; }
+
                     public NoSplitter(IDataView view, int col)
                         : base(view, col)
                     {
                         Contracts.Assert(_view.Schema.GetColumnType(col).RawType == typeof(T));
+                        AsSchema = Data.Schema.Create(this);
                     }
 
                     public override ColumnType GetColumnType(int col)
@@ -1160,6 +1193,8 @@ namespace Microsoft.ML.Runtime.Data
                     // Cache of the types of each slice.
                     private readonly VectorType[] _types;
 
+                    public override Schema AsSchema { get; }
+
                     public override int ColumnCount { get { return _lims.Length; } }
 
                     /// <summary>
@@ -1190,6 +1225,8 @@ namespace Microsoft.ML.Runtime.Data
                         _types[0] = new VectorType(type.ItemType, _lims[0]);
                         for (int c = 1; c < _lims.Length; ++c)
                             _types[c] = new VectorType(type.ItemType, _lims[c] - _lims[c - 1]);
+
+                        AsSchema = Data.Schema.Create(this);
                     }
 
                     public override ColumnType GetColumnType(int col)
@@ -1215,7 +1252,7 @@ namespace Microsoft.ML.Runtime.Data
                         private VBuffer<T> _inputValue;
                         // The delegate to get the input value.
                         private readonly ValueGetter<VBuffer<T>> _inputGetter;
-                        // The limit of _inputValue.Indices 
+                        // The limit of _inputValue.Indices
                         private readonly int[] _srcIndicesLims;
                         // Convenient accessor since we use this all over the place.
                         private int[] Lims { get { return Parent._lims; } }
@@ -1257,12 +1294,12 @@ namespace Microsoft.ML.Runtime.Data
                                 (ref VBuffer<T> value) =>
                                 {
                                     EnsureValid();
-                                    var values = value.Values;
+                                    VBufferEditor<T> editor;
                                     if (_inputValue.IsDense)
                                     {
-                                        Utils.EnsureSize(ref values, len);
-                                        Array.Copy(_inputValue.Values, min, values, 0, len);
-                                        value = new VBuffer<T>(len, values, value.Indices);
+                                        editor = VBufferEditor.Create(ref value, len);
+                                        _inputValue.GetValues().Slice(min, len).CopyTo(editor.Values);
+                                        value = editor.Commit();
                                         return;
                                     }
                                     // In the sparse case we have ranges on Indices/Values to consider.
@@ -1271,20 +1308,24 @@ namespace Microsoft.ML.Runtime.Data
                                     int scount = slim - smin;
                                     if (scount == 0)
                                     {
-                                        value = new VBuffer<T>(len, 0, value.Values, value.Indices);
+                                        VBufferUtils.Resize(ref value, len, 0);
                                         return;
                                     }
-                                    var indices = value.Indices;
-                                    Utils.EnsureSize(ref indices, scount);
-                                    Utils.EnsureSize(ref values, scount);
-                                    Array.Copy(_inputValue.Indices, smin, indices, 0, scount);
-                                    if (min != 0)
+
+                                    editor = VBufferEditor.Create(ref value, len, scount);
+                                    bool isDense = len == scount;
+                                    if (!isDense)
                                     {
-                                        for (int i = 0; i < scount; ++i)
-                                            indices[i] -= min;
+                                        _inputValue.GetIndices().Slice(smin, scount).CopyTo(editor.Indices);
+
+                                        if (min != 0)
+                                        {
+                                            for (int i = 0; i < scount; ++i)
+                                                editor.Indices[i] -= min;
+                                        }
                                     }
-                                    Array.Copy(_inputValue.Values, smin, values, 0, scount);
-                                    value = new VBuffer<T>(len, scount, values, indices);
+                                    _inputValue.GetValues().Slice(smin, scount).CopyTo(editor.Values);
+                                    value = editor.Commit();
                                 };
                         }
 
@@ -1298,15 +1339,14 @@ namespace Microsoft.ML.Runtime.Data
                             // and end of each slice.
                             if (_inputValue.IsDense)
                                 return;
-                            if (_inputValue.Count == 0)
+                            var indices = _inputValue.GetIndices();
+                            if (indices.Length == 0)
                             {
                                 // Handle this separately, since _inputValue.Indices might be null
                                 // in this case, and then we may as well short circuit it anyway.
                                 Array.Clear(_srcIndicesLims, 0, _srcIndicesLims.Length);
                                 return;
                             }
-                            var indices = _inputValue.Indices;
-                            Contracts.AssertValue(indices);
 
                             int ii = 0;
                             for (int i = 0; i < Lims.Length; ++i)
@@ -1315,7 +1355,7 @@ namespace Microsoft.ML.Runtime.Data
                                 // REVIEW: Would some form of bisection search be better
                                 // than this scan? Possibly if the search were to happen across
                                 // all lims at the same time, somehow.
-                                while (ii < _inputValue.Count && indices[ii] < lim)
+                                while (ii < indices.Length && indices[ii] < lim)
                                     ii++;
                                 _srcIndicesLims[i] = ii;
                             }
@@ -1334,7 +1374,7 @@ namespace Microsoft.ML.Runtime.Data
                 private readonly DataViewSlicer _slicer;
                 private readonly IRow[] _sliceRows;
 
-                public ISchema Schema { get { return _slicer.Schema; } }
+                public Schema Schema => _slicer.Schema;
 
                 public Cursor(IChannelProvider provider, DataViewSlicer slicer, IRowCursor input, Func<int, bool> pred, bool[] activeSplitters)
                     : base(provider, input)
@@ -1405,7 +1445,7 @@ namespace Microsoft.ML.Runtime.Data
         }
 
         /// <summary>
-        /// The <see cref="ISlotCursor.GetGetter"/> is parameterized by a type that becomes the
+        /// The <see cref="ISlotCursor.GetGetter{TValue}"/> is parameterized by a type that becomes the
         /// type parameter for a <see cref="VBuffer{T}"/>, and this is generally preferable and more
         /// sensible but for various reasons it's often a lot simpler to have a get-getter be over
         /// the actual type returned by the getter, that is, parameterize this by the actual
@@ -1467,9 +1507,9 @@ namespace Microsoft.ML.Runtime.Data
             private readonly ITransposeDataView _data;
             private readonly int _col;
             private readonly ColumnType _type;
-            private readonly SchemaImpl _schema;
+            private readonly SchemaImpl _schemaImpl;
 
-            public ISchema Schema { get { return _schema; } }
+            public Schema Schema => _schemaImpl.AsSchema;
 
             public bool CanShuffle { get { return false; } }
 
@@ -1484,10 +1524,10 @@ namespace Microsoft.ML.Runtime.Data
 
                 _data = data;
                 _col = col;
-                _schema = new SchemaImpl(this);
+                _schemaImpl = new SchemaImpl(this);
             }
 
-            public long? GetRowCount(bool lazy = true)
+            public long? GetRowCount()
             {
                 var type = _data.Schema.GetColumnType(_col);
                 int valueCount = type.ValueCount;
@@ -1519,12 +1559,15 @@ namespace Microsoft.ML.Runtime.Data
 
                 private IHost Host { get { return _parent._host; } }
 
+                public Schema AsSchema { get; }
+
                 public int ColumnCount { get { return 1; } }
 
                 public SchemaImpl(SlotDataView parent)
                 {
                     Contracts.AssertValue(parent);
                     _parent = parent;
+                    AsSchema = Data.Schema.Create(this);
                 }
 
                 public ColumnType GetColumnType(int col)
@@ -1582,7 +1625,7 @@ namespace Microsoft.ML.Runtime.Data
                 private readonly SlotDataView _parent;
                 private readonly Delegate _getter;
 
-                public ISchema Schema { get { return _parent._schema; } }
+                public Schema Schema => _parent.Schema;
 
                 public Cursor(SlotDataView parent, bool active)
                     : base(parent._host, parent._data.GetSlotCursor(parent._col))
@@ -1617,7 +1660,7 @@ namespace Microsoft.ML.Runtime.Data
         {
             private readonly SchemaImpl _schema;
 
-            public ISchema Schema { get { return _schema; } }
+            public Schema Schema => _schema.AsSchema;
 
             private sealed class SchemaImpl : ISchema
             {
@@ -1625,6 +1668,8 @@ namespace Microsoft.ML.Runtime.Data
                 private readonly VectorType _type;
 
                 private IChannel Ch { get { return _parent.Ch; } }
+
+                public Schema AsSchema { get; }
 
                 public int ColumnCount { get { return 1; } }
 
@@ -1634,6 +1679,7 @@ namespace Microsoft.ML.Runtime.Data
                     _parent = parent;
                     Ch.AssertValue(slotType);
                     _type = slotType;
+                    AsSchema = Schema.Create(this);
                 }
 
                 public ColumnType GetColumnType(int col)

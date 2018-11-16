@@ -2,16 +2,16 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using Float = System.Single;
-
-using System;
-using System.Text;
-using System.Threading;
 using Microsoft.ML.Runtime;
 using Microsoft.ML.Runtime.CommandLine;
 using Microsoft.ML.Runtime.Data;
 using Microsoft.ML.Runtime.Internal.Utilities;
 using Microsoft.ML.Runtime.Model;
+using Microsoft.ML.Transforms;
+using System;
+using System.Text;
+using System.Threading;
+using Float = System.Single;
 
 [assembly: LoadableClass(LabelConvertTransform.Summary, typeof(LabelConvertTransform), typeof(LabelConvertTransform.Arguments), typeof(SignatureDataTransform),
     "", "LabelConvert", "LabelConvertTransform")]
@@ -19,7 +19,7 @@ using Microsoft.ML.Runtime.Model;
 [assembly: LoadableClass(LabelConvertTransform.Summary, typeof(LabelConvertTransform), null, typeof(SignatureLoadDataTransform),
     "Label Convert Transform", LabelConvertTransform.LoaderSignature)]
 
-namespace Microsoft.ML.Runtime.Data
+namespace Microsoft.ML.Transforms
 {
     public sealed class LabelConvertTransform : OneToOneTransformBase
     {
@@ -58,17 +58,31 @@ namespace Microsoft.ML.Runtime.Data
                 verWrittenCur: 0x00010001, // Initial.
                 verReadableCur: 0x00010001,
                 verWeCanReadBack: 0x00010001,
-                loaderSignature: LoaderSignature);
+                loaderSignature: LoaderSignature,
+                loaderAssemblyName: typeof(LabelConvertTransform).Assembly.FullName);
         }
 
         private const string RegistrationName = "LabelConvert";
         private VectorType _slotType;
+
+        /// <summary>
+        /// Initializes a new instance of <see cref="LabelConvertTransform"/>.
+        /// </summary>
+        /// <param name="env">Host Environment.</param>
+        /// <param name="input">Input <see cref="IDataView"/>. This is the output from previous transform or loader.</param>
+        /// <param name="name">Name of the output column.</param>
+        /// <param name="source">Name of the input column.  If this is null '<paramref name="name"/>' will be used.</param>
+        public LabelConvertTransform(IHostEnvironment env, IDataView input, string name, string source = null)
+            : this(env, new Arguments() { Column = new[] { new Column() { Source = source ?? name, Name = name } } }, input)
+        {
+        }
 
         public LabelConvertTransform(IHostEnvironment env, Arguments args, IDataView input)
             : base(env, RegistrationName, Contracts.CheckRef(args, nameof(args)).Column, input, RowCursorUtils.TestGetLabelGetter)
         {
             Contracts.AssertNonEmpty(Infos);
             Contracts.Assert(Infos.Length == Utils.Size(args.Column));
+            Metadata.Seal();
         }
 
         private LabelConvertTransform(IHost host, ModelLoadContext ctx, IDataView input)
@@ -79,6 +93,8 @@ namespace Microsoft.ML.Runtime.Data
             // *** Binary format ***
             // <prefix handled in static Create method>
             // <base>
+
+            Metadata.Seal();
         }
 
         public static LabelConvertTransform Create(IHostEnvironment env, ModelLoadContext ctx, IDataView input)

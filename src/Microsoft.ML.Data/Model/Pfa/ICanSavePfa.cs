@@ -7,22 +7,24 @@ using Newtonsoft.Json.Linq;
 
 namespace Microsoft.ML.Runtime.Model.Pfa
 {
-    public interface ICanSavePfa
+    [BestFriend]
+    internal interface ICanSavePfa
     {
         /// <summary>
         /// Whether this object really is capable of saving itself as part of a PFA
         /// pipeline. An implementor of this object might implement this interface,
         /// but still return <c>false</c> if there is some characteristic of this object
-        /// only detectable during runtime that would prevent its being savable. (E.g.,
+        /// only detectable during runtime that would prevent its being savable. (For example,
         /// it may wrap some other object that may or may not be savable.)
         /// </summary>
         bool CanSavePfa { get; }
     }
 
     /// <summary>
-    /// This data model component is savable as PFA. See http://dmg.org/pfa/ .
+    /// This component know how to save himself in Pfa format.
     /// </summary>
-    public interface ITransformCanSavePfa : ICanSavePfa, IDataTransform
+    [BestFriend]
+    internal interface ISaveAsPfa : ICanSavePfa
     {
         /// <summary>
         /// Save as PFA. For any columns that are output, this interface should use
@@ -35,11 +37,20 @@ namespace Microsoft.ML.Runtime.Model.Pfa
     }
 
     /// <summary>
+    /// This data model component is savable as PFA. See https://dmg.org/pfa/ .
+    /// </summary>
+    [BestFriend]
+    internal interface ITransformCanSavePfa : ISaveAsPfa, IDataTransform
+    {
+    }
+
+    /// <summary>
     /// This <see cref="ISchemaBindableMapper"/> is savable as a PFA. Note that this is
     /// typically called within an <see cref="IDataScorerTransform"/> that is wrapping
     /// this mapper, and has already been bound to it.
     /// </summary>
-    public interface IBindableCanSavePfa : ICanSavePfa, ISchemaBindableMapper
+    [BestFriend]
+    internal interface IBindableCanSavePfa : ICanSavePfa, ISchemaBindableMapper
     {
         /// <summary>
         /// Save as PFA. If <see cref="ICanSavePfa.CanSavePfa"/> is
@@ -63,7 +74,8 @@ namespace Microsoft.ML.Runtime.Model.Pfa
     /// For simple mappers. Intended to be used for <see cref="IValueMapper"/> and
     /// <see cref="Microsoft.ML.Runtime.Internal.Calibration.ICalibrator"/> instances.
     /// </summary>
-    public interface ISingleCanSavePfa : ICanSavePfa
+    [BestFriend]
+    internal interface ISingleCanSavePfa : ICanSavePfa
     {
         /// <summary>
         /// Implementors of this method are responsible for providing the PFA expression that
@@ -84,7 +96,8 @@ namespace Microsoft.ML.Runtime.Model.Pfa
     /// For simple mappers. Intended to be used for <see cref="IValueMapperDist"/>
     /// instances.
     /// </summary>
-    public interface IDistCanSavePfa : ISingleCanSavePfa, IValueMapperDist
+    [BestFriend]
+    internal interface IDistCanSavePfa : ISingleCanSavePfa, IValueMapperDist
     {
         /// <summary>
         /// The call for distribution predictors. Unlike <see cref="ISingleCanSavePfa.SaveAsPfa"/>,

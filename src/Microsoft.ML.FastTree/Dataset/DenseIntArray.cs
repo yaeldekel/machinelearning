@@ -2,12 +2,13 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using Microsoft.ML.Runtime;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
 
-namespace Microsoft.ML.Runtime.FastTree.Internal
+namespace Microsoft.ML.Trainers.FastTree.Internal
 {
 #if USE_SINGLE_PRECISION
     using FloatType = System.Single;
@@ -70,18 +71,18 @@ namespace Microsoft.ML.Runtime.FastTree.Internal
 
 #if USE_FASTTREENATIVE
         [DllImport("FastTreeNative", CallingConvention = CallingConvention.StdCall)]
-        private unsafe static extern int C_Sumup_float(
+        private static extern unsafe int C_Sumup_float(
             int numBits, byte* pData, int* pIndices, float* pSampleOutputs, double* pSampleOutputWeights,
             FloatType* pSumTargetsByBin, double* pSumTargets2ByBin, int* pCountByBin,
             int totalCount, double totalSampleOutputs, double totalSampleOutputWeights);
 
         [DllImport("FastTreeNative", CallingConvention = CallingConvention.StdCall)]
-        private unsafe static extern int C_Sumup_double(
+        private static extern unsafe int C_Sumup_double(
             int numBits, byte* pData, int* pIndices, double* pSampleOutputs, double* pSampleOutputWeights,
             FloatType* pSumTargetsByBin, double* pSumTargets2ByBin, int* pCountByBin,
             int totalCount, double totalSampleOutputs, double totalSampleOutputWeights);
 
-        protected unsafe static void SumupCPlusPlusDense(SumupInputData input, FeatureHistogram histogram,
+        protected static unsafe void SumupCPlusPlusDense(SumupInputData input, FeatureHistogram histogram,
             byte* data, int numBits)
         {
             using (Timer.Time(TimerEvent.SumupCppDense))

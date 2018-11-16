@@ -14,29 +14,25 @@ using Microsoft.ML.Runtime.Internal.Utilities;
 
 namespace Microsoft.ML.Runtime.Data.Conversion
 {
-    using BL = DvBool;
-    using DT = DvDateTime;
-    using DZ = DvDateTimeZone;
-    using I1 = DvInt1;
-    using I2 = DvInt2;
-    using I4 = DvInt4;
-    using I8 = DvInt8;
+    using BL = Boolean;
+    using DT = DateTime;
+    using DZ = DateTimeOffset;
     using R4 = Single;
     using R8 = Double;
-    using RawI1 = SByte;
-    using RawI2 = Int16;
-    using RawI4 = Int32;
-    using RawI8 = Int64;
+    using I1 = SByte;
+    using I2 = Int16;
+    using I4 = Int32;
+    using I8 = Int64;
     using SB = StringBuilder;
-    using TS = DvTimeSpan;
-    using TX = DvText;
+    using TX = ReadOnlyMemory<char>;
+    using TS = TimeSpan;
     using U1 = Byte;
     using U2 = UInt16;
     using U4 = UInt32;
     using U8 = UInt64;
     using UG = UInt128;
 
-    public delegate bool TryParseMapper<T>(ref TX src, out T dst);
+    public delegate bool TryParseMapper<T>(in TX src, out T dst);
 
     /// <summary>
     /// This type exists to provide efficient delegates for conversion between standard ColumnTypes,
@@ -53,7 +49,7 @@ namespace Microsoft.ML.Runtime.Data.Conversion
         // REVIEW: Reconcile implementations with TypeUtils, and clarify the distinction.
 
         // Singleton pattern.
-        private volatile static Conversions _instance;
+        private static volatile Conversions _instance;
         public static Conversions Instance
         {
             get
@@ -244,41 +240,14 @@ namespace Microsoft.ML.Runtime.Data.Conversion
             AddStd<DZ, R8>(Convert);
             AddAux<DZ, SB>(Convert);
 
-            AddIsNA<I1>(IsNA);
-            AddIsNA<I2>(IsNA);
-            AddIsNA<I4>(IsNA);
-            AddIsNA<I8>(IsNA);
             AddIsNA<R4>(IsNA);
             AddIsNA<R8>(IsNA);
-            AddIsNA<BL>(IsNA);
-            AddIsNA<TX>(IsNA);
-            AddIsNA<TS>(IsNA);
-            AddIsNA<DT>(IsNA);
-            AddIsNA<DZ>(IsNA);
 
-            AddGetNA<I1>(GetNA);
-            AddGetNA<I2>(GetNA);
-            AddGetNA<I4>(GetNA);
-            AddGetNA<I8>(GetNA);
             AddGetNA<R4>(GetNA);
             AddGetNA<R8>(GetNA);
-            AddGetNA<BL>(GetNA);
-            AddGetNA<TX>(GetNA);
-            AddGetNA<TS>(GetNA);
-            AddGetNA<DT>(GetNA);
-            AddGetNA<DZ>(GetNA);
 
-            AddHasNA<I1>(HasNA);
-            AddHasNA<I2>(HasNA);
-            AddHasNA<I4>(HasNA);
-            AddHasNA<I8>(HasNA);
             AddHasNA<R4>(HasNA);
             AddHasNA<R8>(HasNA);
-            AddHasNA<BL>(HasNA);
-            AddHasNA<TX>(HasNA);
-            AddHasNA<TS>(HasNA);
-            AddHasNA<DT>(HasNA);
-            AddHasNA<DZ>(HasNA);
 
             AddIsDef<I1>(IsDefault);
             AddIsDef<I2>(IsDefault);
@@ -346,7 +315,7 @@ namespace Microsoft.ML.Runtime.Data.Conversion
             _delegatesAll.Add(GetKey(kindSrc, kindDst), fn);
         }
 
-        private void AddIsNA<T>(RefPredicate<T> fn)
+        private void AddIsNA<T>(InPredicate<T> fn)
         {
             var kind = _kinds[typeof(T)];
             _isNADelegates.Add(kind, fn);
@@ -358,19 +327,19 @@ namespace Microsoft.ML.Runtime.Data.Conversion
             _getNADelegates.Add(kind, fn);
         }
 
-        private void AddHasNA<T>(RefPredicate<VBuffer<T>> fn)
+        private void AddHasNA<T>(InPredicate<VBuffer<T>> fn)
         {
             var kind = _kinds[typeof(T)];
             _hasNADelegates.Add(kind, fn);
         }
 
-        private void AddIsDef<T>(RefPredicate<T> fn)
+        private void AddIsDef<T>(InPredicate<T> fn)
         {
             var kind = _kinds[typeof(T)];
             _isDefaultDelegates.Add(kind, fn);
         }
 
-        private void AddHasZero<T>(RefPredicate<VBuffer<T>> fn)
+        private void AddHasZero<T>(InPredicate<VBuffer<T>> fn)
         {
             var kind = _kinds[typeof(T)];
             _hasZeroDelegates.Add(kind, fn);
@@ -533,7 +502,7 @@ namespace Microsoft.ML.Runtime.Data.Conversion
         private bool TryGetStringConversion<TSrc>(out ValueMapper<TSrc, SB> conv)
         {
             DataKind kindSrc;
-            if (!_kinds.TryGetValue(typeof (TSrc), out kindSrc))
+            if (!_kinds.TryGetValue(typeof(TSrc), out kindSrc))
             {
                 conv = null;
                 return false;
@@ -565,38 +534,38 @@ namespace Microsoft.ML.Runtime.Data.Conversion
             if (count > 0)
             {
                 return
-                    (ref TSrc src, ref SB dst) =>
+                    (in TSrc src, ref SB dst) =>
                     {
                         ulong tmp = 0;
-                        convSrc(ref src, ref tmp);
+                        convSrc(in src, ref tmp);
                         if (tmp == 0 || tmp > (ulong)count)
                             ClearDst(ref dst);
                         else
                         {
                             tmp = tmp + min - 1;
-                            convU8(ref tmp, ref dst);
+                            convU8(in tmp, ref dst);
                         }
                     };
             }
             else
             {
                 return
-                    (ref TSrc src, ref SB dst) =>
+                    (in TSrc src, ref SB dst) =>
                     {
                         U8 tmp = 0;
-                        convSrc(ref src, ref tmp);
+                        convSrc(in src, ref tmp);
                         if (tmp == 0 || min > 1 && tmp > U8.MaxValue - min + 1)
                             ClearDst(ref dst);
                         else
                         {
                             tmp = tmp + min - 1;
-                            convU8(ref tmp, ref dst);
+                            convU8(in tmp, ref dst);
                         }
                     };
             }
         }
 
-        public TryParseMapper<TDst> GetParseConversion<TDst>(ColumnType typeDst)
+        public TryParseMapper<TDst> GetTryParseConversion<TDst>(ColumnType typeDst)
         {
             Contracts.CheckValue(typeDst, nameof(typeDst));
             Contracts.CheckParam(typeDst.IsStandardScalar || typeDst.IsKey, nameof(typeDst),
@@ -633,15 +602,15 @@ namespace Microsoft.ML.Runtime.Data.Conversion
             bool identity;
             var fnConv = GetStandardConversion<U8, TDst>(NumberType.U8, NumberType.FromKind(key.RawKind), out identity);
             return
-                (ref TX src, out TDst dst) =>
+                (in TX src, out TDst dst) =>
                 {
                     ulong uu;
                     dst = default(TDst);
-                    if (!TryParseKey(ref src, min, max, out uu))
+                    if (!TryParseKey(in src, min, max, out uu))
                         return false;
                     // REVIEW: This call to fnConv should never need range checks, so could be made faster.
                     // Also, it would be nice to be able to assert that it doesn't overflow....
-                    fnConv(ref uu, ref dst);
+                    fnConv(in uu, ref dst);
                     return true;
                 };
         }
@@ -676,18 +645,18 @@ namespace Microsoft.ML.Runtime.Data.Conversion
             bool identity;
             var fnConv = GetStandardConversion<U8, TDst>(NumberType.U8, NumberType.FromKind(key.RawKind), out identity);
             return
-                (ref TX src, ref TDst dst) =>
+                (in TX src, ref TDst dst) =>
                 {
                     ulong uu;
                     dst = default(TDst);
-                    if (!TryParseKey(ref src, min, max, out uu))
+                    if (!TryParseKey(in src, min, max, out uu))
                     {
                         dst = default(TDst);
                         return;
                     }
                     // REVIEW: This call to fnConv should never need range checks, so could be made faster.
                     // Also, it would be nice to be able to assert that it doesn't overflow....
-                    fnConv(ref uu, ref dst);
+                    fnConv(in uu, ref dst);
                 };
         }
 
@@ -700,7 +669,7 @@ namespace Microsoft.ML.Runtime.Data.Conversion
             return dst;
         }
 
-        public RefPredicate<T> GetIsDefaultPredicate<T>(ColumnType type)
+        public InPredicate<T> GetIsDefaultPredicate<T>(ColumnType type)
         {
             Contracts.CheckValue(type, nameof(type));
             Contracts.CheckParam(!type.IsVector, nameof(type));
@@ -711,18 +680,18 @@ namespace Microsoft.ML.Runtime.Data.Conversion
             if (!t.IsStandardScalar && !t.IsKey || !_isDefaultDelegates.TryGetValue(t.RawKind, out del))
                 throw Contracts.Except("No IsDefault predicate for '{0}'", type);
 
-            return (RefPredicate<T>)del;
+            return (InPredicate<T>)del;
         }
 
-        public RefPredicate<T> GetIsNAPredicate<T>(ColumnType type)
+        public InPredicate<T> GetIsNAPredicate<T>(ColumnType type)
         {
-            RefPredicate<T> pred;
+            InPredicate<T> pred;
             if (TryGetIsNAPredicate(type, out pred))
                 return pred;
             throw Contracts.Except("No IsNA predicate for '{0}'", type);
         }
 
-        public bool TryGetIsNAPredicate<T>(ColumnType type, out RefPredicate<T> pred)
+        public bool TryGetIsNAPredicate<T>(ColumnType type, out InPredicate<T> pred)
         {
             Contracts.CheckValue(type, nameof(type));
             Contracts.CheckParam(type.RawType == typeof(T), nameof(type));
@@ -734,8 +703,8 @@ namespace Microsoft.ML.Runtime.Data.Conversion
                 return false;
             }
 
-            Contracts.Assert(del is RefPredicate<T>);
-            pred = (RefPredicate<T>)del;
+            Contracts.Assert(del is InPredicate<T>);
+            pred = (InPredicate<T>)del;
             return true;
         }
 
@@ -761,7 +730,7 @@ namespace Microsoft.ML.Runtime.Data.Conversion
             return true;
         }
 
-        public RefPredicate<VBuffer<T>> GetHasMissingPredicate<T>(VectorType type)
+        public InPredicate<VBuffer<T>> GetHasMissingPredicate<T>(VectorType type)
         {
             Contracts.CheckValue(type, nameof(type));
             Contracts.CheckParam(type.ItemType.RawType == typeof(T), nameof(type));
@@ -777,7 +746,7 @@ namespace Microsoft.ML.Runtime.Data.Conversion
             else if (!t.IsStandardScalar || !_hasNADelegates.TryGetValue(t.RawKind, out del))
                 throw Contracts.Except("No HasMissing predicate for '{0}'", type);
 
-            return (RefPredicate<VBuffer<T>>)del;
+            return (InPredicate<VBuffer<T>>)del;
         }
 
         /// <summary>
@@ -822,7 +791,7 @@ namespace Microsoft.ML.Runtime.Data.Conversion
 #if DEBUG
             Delegate isDefPred;
             if (_isDefaultDelegates.TryGetValue(type.RawKind, out isDefPred))
-                Contracts.Assert(!((RefPredicate<T>)isDefPred)(ref res));
+                Contracts.Assert(!((InPredicate<T>)isDefPred)(in res));
 #endif
 
             return res;
@@ -846,214 +815,187 @@ namespace Microsoft.ML.Runtime.Data.Conversion
 
         // The IsNA methods are for efficient delegates (instance instead of static).
         #region IsNA
-        private bool IsNA(ref I1 src) => src.IsNA;
-        private bool IsNA(ref I2 src) => src.IsNA;
-        private bool IsNA(ref I4 src) => src.IsNA;
-        private bool IsNA(ref I8 src) => src.IsNA;
-        private bool IsNA(ref R4 src) => src.IsNA();
-        private bool IsNA(ref R8 src) => src.IsNA();
-        private bool IsNA(ref BL src) => src.IsNA;
-        private bool IsNA(ref TS src) => src.IsNA;
-        private bool IsNA(ref DT src) => src.IsNA;
-        private bool IsNA(ref DZ src) => src.IsNA;
-        private bool IsNA(ref TX src) => src.IsNA;
+        private bool IsNA(in R4 src) => R4.IsNaN(src);
+        private bool IsNA(in R8 src) => R8.IsNaN(src);
         #endregion IsNA
 
         #region HasNA
-        private bool HasNA(ref VBuffer<I1> src) { for (int i = 0; i < src.Count; i++) { if (src.Values[i].IsNA) return true; } return false; }
-        private bool HasNA(ref VBuffer<I2> src) { for (int i = 0; i < src.Count; i++) { if (src.Values[i].IsNA) return true; } return false; }
-        private bool HasNA(ref VBuffer<I4> src) { for (int i = 0; i < src.Count; i++) { if (src.Values[i].IsNA) return true; } return false; }
-        private bool HasNA(ref VBuffer<I8> src) { for (int i = 0; i < src.Count; i++) { if (src.Values[i].IsNA) return true; } return false; }
-        private bool HasNA(ref VBuffer<R4> src) { for (int i = 0; i < src.Count; i++) { if (src.Values[i].IsNA()) return true; } return false; }
-        private bool HasNA(ref VBuffer<R8> src) { for (int i = 0; i < src.Count; i++) { if (src.Values[i].IsNA()) return true; } return false; }
-        private bool HasNA(ref VBuffer<BL> src) { for (int i = 0; i < src.Count; i++) { if (src.Values[i].IsNA) return true; } return false; }
-        private bool HasNA(ref VBuffer<TS> src) { for (int i = 0; i < src.Count; i++) { if (src.Values[i].IsNA) return true; } return false; }
-        private bool HasNA(ref VBuffer<DT> src) { for (int i = 0; i < src.Count; i++) { if (src.Values[i].IsNA) return true; } return false; }
-        private bool HasNA(ref VBuffer<DZ> src) { for (int i = 0; i < src.Count; i++) { if (src.Values[i].IsNA) return true; } return false; }
-        private bool HasNA(ref VBuffer<TX> src) { for (int i = 0; i < src.Count; i++) { if (src.Values[i].IsNA) return true; } return false; }
+        private bool HasNA(in VBuffer<R4> src) { var srcValues = src.GetValues(); for (int i = 0; i < srcValues.Length; i++) { if (R4.IsNaN(srcValues[i])) return true; } return false; }
+        private bool HasNA(in VBuffer<R8> src) { var srcValues = src.GetValues(); for (int i = 0; i < srcValues.Length; i++) { if (R8.IsNaN(srcValues[i])) return true; } return false; }
         #endregion HasNA
 
         #region IsDefault
-        private bool IsDefault(ref I1 src) => src.RawValue == 0;
-        private bool IsDefault(ref I2 src) => src.RawValue == 0;
-        private bool IsDefault(ref I4 src) => src.RawValue == 0;
-        private bool IsDefault(ref I8 src) => src.RawValue == 0;
-        private bool IsDefault(ref R4 src) => src == 0;
-        private bool IsDefault(ref R8 src) => src == 0;
-        private bool IsDefault(ref TX src) => src.IsEmpty;
-        private bool IsDefault(ref BL src) => src.IsFalse;
-        private bool IsDefault(ref U1 src) => src == 0;
-        private bool IsDefault(ref U2 src) => src == 0;
-        private bool IsDefault(ref U4 src) => src == 0;
-        private bool IsDefault(ref U8 src) => src == 0;
-        private bool IsDefault(ref UG src) => src.Equals(default(UG));
-        private bool IsDefault(ref TS src) => src.Equals(default(TS));
-        private bool IsDefault(ref DT src) => src.Equals(default(DT));
-        private bool IsDefault(ref DZ src) => src.Equals(default(DZ));
+        private bool IsDefault(in I1 src) => src == default(I1);
+        private bool IsDefault(in I2 src) => src == default(I2);
+        private bool IsDefault(in I4 src) => src == default(I4);
+        private bool IsDefault(in I8 src) => src == default(I8);
+        private bool IsDefault(in R4 src) => src == 0;
+        private bool IsDefault(in R8 src) => src == 0;
+        private bool IsDefault(in TX src) => src.IsEmpty;
+        private bool IsDefault(in BL src) => src == default;
+        private bool IsDefault(in U1 src) => src == 0;
+        private bool IsDefault(in U2 src) => src == 0;
+        private bool IsDefault(in U4 src) => src == 0;
+        private bool IsDefault(in U8 src) => src == 0;
+        private bool IsDefault(in UG src) => src.Equals(default(UG));
+        private bool IsDefault(in TS src) => src.Equals(default(TS));
+        private bool IsDefault(in DT src) => src.Equals(default(DT));
+        private bool IsDefault(in DZ src) => src.Equals(default(DZ));
         #endregion IsDefault
 
         #region HasZero
-        private bool HasZero(ref VBuffer<U1> src) { if (!src.IsDense) return true; for (int i = 0; i < src.Count; i++) { if (src.Values[i] == 0) return true; } return false; }
-        private bool HasZero(ref VBuffer<U2> src) { if (!src.IsDense) return true; for (int i = 0; i < src.Count; i++) { if (src.Values[i] == 0) return true; } return false; }
-        private bool HasZero(ref VBuffer<U4> src) { if (!src.IsDense) return true; for (int i = 0; i < src.Count; i++) { if (src.Values[i] == 0) return true; } return false; }
-        private bool HasZero(ref VBuffer<U8> src) { if (!src.IsDense) return true; for (int i = 0; i < src.Count; i++) { if (src.Values[i] == 0) return true; } return false; }
+        private bool HasZero(in VBuffer<U1> src) { if (!src.IsDense) return true; var srcValues = src.GetValues(); for (int i = 0; i < srcValues.Length; i++) { if (srcValues[i] == 0) return true; } return false; }
+        private bool HasZero(in VBuffer<U2> src) { if (!src.IsDense) return true; var srcValues = src.GetValues(); for (int i = 0; i < srcValues.Length; i++) { if (srcValues[i] == 0) return true; } return false; }
+        private bool HasZero(in VBuffer<U4> src) { if (!src.IsDense) return true; var srcValues = src.GetValues(); for (int i = 0; i < srcValues.Length; i++) { if (srcValues[i] == 0) return true; } return false; }
+        private bool HasZero(in VBuffer<U8> src) { if (!src.IsDense) return true; var srcValues = src.GetValues(); for (int i = 0; i < srcValues.Length; i++) { if (srcValues[i] == 0) return true; } return false; }
         #endregion HasZero
 
         #region GetNA
-        private void GetNA(ref I1 value) => value = I1.NA;
-        private void GetNA(ref I2 value) => value = I2.NA;
-        private void GetNA(ref I4 value) => value = I4.NA;
-        private void GetNA(ref I8 value) => value = I8.NA;
         private void GetNA(ref R4 value) => value = R4.NaN;
         private void GetNA(ref R8 value) => value = R8.NaN;
-        private void GetNA(ref BL value) => value = BL.NA;
-        private void GetNA(ref TS value) => value = TS.NA;
-        private void GetNA(ref DT value) => value = DT.NA;
-        private void GetNA(ref DZ value) => value = DZ.NA;
-        private void GetNA(ref TX value) => value = TX.NA;
         #endregion GetNA
 
         #region ToI1
-        public void Convert(ref I1 src, ref I1 dst) => dst = src;
-        public void Convert(ref I2 src, ref I1 dst) => dst = (I1)src;
-        public void Convert(ref I4 src, ref I1 dst) => dst = (I1)src;
-        public void Convert(ref I8 src, ref I1 dst) => dst = (I1)src;
+        public void Convert(in I1 src, ref I1 dst) => dst = src;
+        public void Convert(in I2 src, ref I1 dst) => dst = (I1)src;
+        public void Convert(in I4 src, ref I1 dst) => dst = (I1)src;
+        public void Convert(in I8 src, ref I1 dst) => dst = (I1)src;
         #endregion ToI1
 
         #region ToI2
-        public void Convert(ref I1 src, ref I2 dst) => dst = src;
-        public void Convert(ref I2 src, ref I2 dst) => dst = src;
-        public void Convert(ref I4 src, ref I2 dst) => dst = (I2)src;
-        public void Convert(ref I8 src, ref I2 dst) => dst = (I2)src;
+        public void Convert(in I1 src, ref I2 dst) => dst = src;
+        public void Convert(in I2 src, ref I2 dst) => dst = src;
+        public void Convert(in I4 src, ref I2 dst) => dst = (I2)src;
+        public void Convert(in I8 src, ref I2 dst) => dst = (I2)src;
         #endregion ToI2
 
         #region ToI4
-        public void Convert(ref I1 src, ref I4 dst) => dst = src;
-        public void Convert(ref I2 src, ref I4 dst) => dst = src;
-        public void Convert(ref I4 src, ref I4 dst) => dst = src;
-        public void Convert(ref I8 src, ref I4 dst) => dst = (I4)src;
+        public void Convert(in I1 src, ref I4 dst) => dst = src;
+        public void Convert(in I2 src, ref I4 dst) => dst = src;
+        public void Convert(in I4 src, ref I4 dst) => dst = src;
+        public void Convert(in I8 src, ref I4 dst) => dst = (I4)src;
         #endregion ToI4
 
         #region ToI8
-        public void Convert(ref I1 src, ref I8 dst) => dst = src;
-        public void Convert(ref I2 src, ref I8 dst) => dst = src;
-        public void Convert(ref I4 src, ref I8 dst) => dst = src;
-        public void Convert(ref I8 src, ref I8 dst) => dst = src;
+        public void Convert(in I1 src, ref I8 dst) => dst = src;
+        public void Convert(in I2 src, ref I8 dst) => dst = src;
+        public void Convert(in I4 src, ref I8 dst) => dst = src;
+        public void Convert(in I8 src, ref I8 dst) => dst = src;
 
-        public void Convert(ref TS src, ref I8 dst) => dst = (I8)src.Ticks;
-        public void Convert(ref DT src, ref I8 dst) => dst = (I8)src.Ticks;
-        public void Convert(ref DZ src, ref I8 dst) => dst = (I8)src.UtcDateTime.Ticks;
+        public void Convert(in TS src, ref I8 dst) => dst = (I8)src.Ticks;
+        public void Convert(in DT src, ref I8 dst) => dst = (I8)src.Ticks;
+        public void Convert(in DZ src, ref I8 dst) => dst = (I8)src.UtcDateTime.Ticks;
         #endregion ToI8
 
         #region ToU1
-        public void Convert(ref U1 src, ref U1 dst) => dst = src;
-        public void Convert(ref U2 src, ref U1 dst) => dst = src <= U1.MaxValue ? (U1)src : (U1)0;
-        public void Convert(ref U4 src, ref U1 dst) => dst = src <= U1.MaxValue ? (U1)src : (U1)0;
-        public void Convert(ref U8 src, ref U1 dst) => dst = src <= U1.MaxValue ? (U1)src : (U1)0;
-        public void Convert(ref UG src, ref U1 dst) => dst = src.Hi == 0 && src.Lo <= U1.MaxValue ? (U1)src.Lo : (U1)0;
+        public void Convert(in U1 src, ref U1 dst) => dst = src;
+        public void Convert(in U2 src, ref U1 dst) => dst = src <= U1.MaxValue ? (U1)src : (U1)0;
+        public void Convert(in U4 src, ref U1 dst) => dst = src <= U1.MaxValue ? (U1)src : (U1)0;
+        public void Convert(in U8 src, ref U1 dst) => dst = src <= U1.MaxValue ? (U1)src : (U1)0;
+        public void Convert(in UG src, ref U1 dst) => dst = src.Hi == 0 && src.Lo <= U1.MaxValue ? (U1)src.Lo : (U1)0;
         #endregion ToU1
 
         #region ToU2
-        public void Convert(ref U1 src, ref U2 dst) => dst = src;
-        public void Convert(ref U2 src, ref U2 dst) => dst = src;
-        public void Convert(ref U4 src, ref U2 dst) => dst = src <= U2.MaxValue ? (U2)src : (U2)0;
-        public void Convert(ref U8 src, ref U2 dst) => dst = src <= U2.MaxValue ? (U2)src : (U2)0;
-        public void Convert(ref UG src, ref U2 dst) => dst = src.Hi == 0 && src.Lo <= U2.MaxValue ? (U2)src.Lo : (U2)0;
+        public void Convert(in U1 src, ref U2 dst) => dst = src;
+        public void Convert(in U2 src, ref U2 dst) => dst = src;
+        public void Convert(in U4 src, ref U2 dst) => dst = src <= U2.MaxValue ? (U2)src : (U2)0;
+        public void Convert(in U8 src, ref U2 dst) => dst = src <= U2.MaxValue ? (U2)src : (U2)0;
+        public void Convert(in UG src, ref U2 dst) => dst = src.Hi == 0 && src.Lo <= U2.MaxValue ? (U2)src.Lo : (U2)0;
         #endregion ToU2
 
         #region ToU4
-        public void Convert(ref U1 src, ref U4 dst) => dst = src;
-        public void Convert(ref U2 src, ref U4 dst) => dst = src;
-        public void Convert(ref U4 src, ref U4 dst) => dst = src;
-        public void Convert(ref U8 src, ref U4 dst) => dst = src <= U4.MaxValue ? (U4)src : (U4)0;
-        public void Convert(ref UG src, ref U4 dst) => dst = src.Hi == 0 && src.Lo <= U4.MaxValue ? (U4)src.Lo : (U4)0;
+        public void Convert(in U1 src, ref U4 dst) => dst = src;
+        public void Convert(in U2 src, ref U4 dst) => dst = src;
+        public void Convert(in U4 src, ref U4 dst) => dst = src;
+        public void Convert(in U8 src, ref U4 dst) => dst = src <= U4.MaxValue ? (U4)src : (U4)0;
+        public void Convert(in UG src, ref U4 dst) => dst = src.Hi == 0 && src.Lo <= U4.MaxValue ? (U4)src.Lo : (U4)0;
         #endregion ToU4
 
         #region ToU8
-        public void Convert(ref U1 src, ref U8 dst) => dst = src;
-        public void Convert(ref U2 src, ref U8 dst) => dst = src;
-        public void Convert(ref U4 src, ref U8 dst) => dst = src;
-        public void Convert(ref U8 src, ref U8 dst) => dst = src;
-        public void Convert(ref UG src, ref U8 dst) => dst = src.Hi == 0 ? src.Lo : (U8)0;
+        public void Convert(in U1 src, ref U8 dst) => dst = src;
+        public void Convert(in U2 src, ref U8 dst) => dst = src;
+        public void Convert(in U4 src, ref U8 dst) => dst = src;
+        public void Convert(in U8 src, ref U8 dst) => dst = src;
+        public void Convert(in UG src, ref U8 dst) => dst = src.Hi == 0 ? src.Lo : (U8)0;
         #endregion ToU8
 
         #region ToUG
-        public void Convert(ref U1 src, ref UG dst) => dst = new UG(src, 0);
-        public void Convert(ref U2 src, ref UG dst) => dst = new UG(src, 0);
-        public void Convert(ref U4 src, ref UG dst) => dst = new UG(src, 0);
-        public void Convert(ref U8 src, ref UG dst) => dst = new UG(src, 0);
-        public void Convert(ref UG src, ref UG dst) => dst = src;
+        public void Convert(in U1 src, ref UG dst) => dst = new UG(src, 0);
+        public void Convert(in U2 src, ref UG dst) => dst = new UG(src, 0);
+        public void Convert(in U4 src, ref UG dst) => dst = new UG(src, 0);
+        public void Convert(in U8 src, ref UG dst) => dst = new UG(src, 0);
+        public void Convert(in UG src, ref UG dst) => dst = src;
         #endregion ToUG
 
         #region ToR4
-        public void Convert(ref I1 src, ref R4 dst) => dst = (R4)src;
-        public void Convert(ref I2 src, ref R4 dst) => dst = (R4)src;
-        public void Convert(ref I4 src, ref R4 dst) => dst = (R4)src;
-        public void Convert(ref I8 src, ref R4 dst) => dst = (R4)src;
-        public void Convert(ref U1 src, ref R4 dst) => dst = src;
-        public void Convert(ref U2 src, ref R4 dst) => dst = src;
-        public void Convert(ref U4 src, ref R4 dst) => dst = src;
+        public void Convert(in I1 src, ref R4 dst) => dst = (R4)src;
+        public void Convert(in I2 src, ref R4 dst) => dst = (R4)src;
+        public void Convert(in I4 src, ref R4 dst) => dst = (R4)src;
+        public void Convert(in I8 src, ref R4 dst) => dst = (R4)src;
+        public void Convert(in U1 src, ref R4 dst) => dst = src;
+        public void Convert(in U2 src, ref R4 dst) => dst = src;
+        public void Convert(in U4 src, ref R4 dst) => dst = src;
         // REVIEW: The 64-bit JIT has a bug in that it rounds incorrectly from ulong
         // to floating point when the high bit of the ulong is set. Should we work around the bug
         // or just live with it? See the DoubleParser code for details.
-        public void Convert(ref U8 src, ref R4 dst) => dst = src;
+        public void Convert(in U8 src, ref R4 dst) => dst = src;
 
-        public void Convert(ref TS src, ref R4 dst) => dst = (R4)src.Ticks;
-        public void Convert(ref DT src, ref R4 dst) => dst = (R4)src.Ticks;
-        public void Convert(ref DZ src, ref R4 dst) => dst = (R4)src.UtcDateTime.Ticks;
+        public void Convert(in TS src, ref R4 dst) => dst = (R4)src.Ticks;
+        public void Convert(in DT src, ref R4 dst) => dst = (R4)src.Ticks;
+        public void Convert(in DZ src, ref R4 dst) => dst = (R4)src.UtcDateTime.Ticks;
         #endregion ToR4
 
         #region ToR8
-        public void Convert(ref I1 src, ref R8 dst) => dst = (R8)src;
-        public void Convert(ref I2 src, ref R8 dst) => dst = (R8)src;
-        public void Convert(ref I4 src, ref R8 dst) => dst = (R8)src;
-        public void Convert(ref I8 src, ref R8 dst) => dst = (R8)src;
-        public void Convert(ref U1 src, ref R8 dst) => dst = src;
-        public void Convert(ref U2 src, ref R8 dst) => dst = src;
-        public void Convert(ref U4 src, ref R8 dst) => dst = src;
+        public void Convert(in I1 src, ref R8 dst) => dst = (R8)src;
+        public void Convert(in I2 src, ref R8 dst) => dst = (R8)src;
+        public void Convert(in I4 src, ref R8 dst) => dst = (R8)src;
+        public void Convert(in I8 src, ref R8 dst) => dst = (R8)src;
+        public void Convert(in U1 src, ref R8 dst) => dst = src;
+        public void Convert(in U2 src, ref R8 dst) => dst = src;
+        public void Convert(in U4 src, ref R8 dst) => dst = src;
         // REVIEW: The 64-bit JIT has a bug in that it rounds incorrectly from ulong
         // to floating point when the high bit of the ulong is set. Should we work around the bug
         // or just live with it? See the DoubleParser code for details.
-        public void Convert(ref U8 src, ref R8 dst) => dst = src;
+        public void Convert(in U8 src, ref R8 dst) => dst = src;
 
-        public void Convert(ref TS src, ref R8 dst) => dst = (R8)src.Ticks;
-        public void Convert(ref DT src, ref R8 dst) => dst = (R8)src.Ticks;
-        public void Convert(ref DZ src, ref R8 dst) => dst = (R8)src.UtcDateTime.Ticks;
+        public void Convert(in TS src, ref R8 dst) => dst = (R8)src.Ticks;
+        public void Convert(in DT src, ref R8 dst) => dst = (R8)src.Ticks;
+        public void Convert(in DZ src, ref R8 dst) => dst = (R8)src.UtcDateTime.Ticks;
         #endregion ToR8
 
         #region ToStringBuilder
-        public void Convert(ref I1 src, ref SB dst) { ClearDst(ref dst); if (!src.IsNA) dst.Append(src.RawValue); }
-        public void Convert(ref I2 src, ref SB dst) { ClearDst(ref dst); if (!src.IsNA) dst.Append(src.RawValue); }
-        public void Convert(ref I4 src, ref SB dst) { ClearDst(ref dst); if (!src.IsNA) dst.Append(src.RawValue); }
-        public void Convert(ref I8 src, ref SB dst) { ClearDst(ref dst); if (!src.IsNA) dst.Append(src.RawValue); }
-        public void Convert(ref U1 src, ref SB dst) => ClearDst(ref dst).Append(src);
-        public void Convert(ref U2 src, ref SB dst) => ClearDst(ref dst).Append(src);
-        public void Convert(ref U4 src, ref SB dst) => ClearDst(ref dst).Append(src);
-        public void Convert(ref U8 src, ref SB dst) => ClearDst(ref dst).Append(src);
-        public void Convert(ref UG src, ref SB dst) { ClearDst(ref dst); dst.AppendFormat("0x{0:x16}{1:x16}", src.Hi, src.Lo); }
-        public void Convert(ref R4 src, ref SB dst) { ClearDst(ref dst); if (!src.IsNA()) dst.AppendFormat(CultureInfo.InvariantCulture, "{0:R}", src); }
-        public void Convert(ref R8 src, ref SB dst) { ClearDst(ref dst); if (!src.IsNA()) dst.AppendFormat(CultureInfo.InvariantCulture, "{0:G17}", src); }
-        public void Convert(ref BL src, ref SB dst)
+        public void Convert(in I1 src, ref SB dst) { ClearDst(ref dst); dst.Append(src); }
+        public void Convert(in I2 src, ref SB dst) { ClearDst(ref dst); dst.Append(src); }
+        public void Convert(in I4 src, ref SB dst) { ClearDst(ref dst); dst.Append(src); }
+        public void Convert(in I8 src, ref SB dst) { ClearDst(ref dst); dst.Append(src); }
+        public void Convert(in U1 src, ref SB dst) => ClearDst(ref dst).Append(src);
+        public void Convert(in U2 src, ref SB dst) => ClearDst(ref dst).Append(src);
+        public void Convert(in U4 src, ref SB dst) => ClearDst(ref dst).Append(src);
+        public void Convert(in U8 src, ref SB dst) => ClearDst(ref dst).Append(src);
+        public void Convert(in UG src, ref SB dst) { ClearDst(ref dst); dst.AppendFormat("0x{0:x16}{1:x16}", src.Hi, src.Lo); }
+        public void Convert(in R4 src, ref SB dst) { ClearDst(ref dst); if (R4.IsNaN(src)) dst.AppendFormat(CultureInfo.InvariantCulture, "{0}", "?"); else dst.AppendFormat(CultureInfo.InvariantCulture, "{0:R}", src); }
+        public void Convert(in R8 src, ref SB dst) { ClearDst(ref dst); if (R8.IsNaN(src)) dst.AppendFormat(CultureInfo.InvariantCulture, "{0}", "?"); else dst.AppendFormat(CultureInfo.InvariantCulture, "{0:G17}", src); }
+        public void Convert(in BL src, ref SB dst)
         {
             ClearDst(ref dst);
-            if (src.IsFalse)
+            if (!src)
                 dst.Append("0");
-            else if (src.IsTrue)
+            else
                 dst.Append("1");
         }
-        public void Convert(ref TS src, ref SB dst) { ClearDst(ref dst); if (!src.IsNA) dst.AppendFormat("{0:c}", (TimeSpan)src); }
-        public void Convert(ref DT src, ref SB dst) { ClearDst(ref dst); if (!src.IsNA) dst.AppendFormat("{0:o}", (DateTime)src); }
-        public void Convert(ref DZ src, ref SB dst) { ClearDst(ref dst); if (!src.IsNA) dst.AppendFormat("{0:o}", (DateTimeOffset)src); }
+        public void Convert(in TS src, ref SB dst) { ClearDst(ref dst); dst.AppendFormat("{0:c}", src); }
+        public void Convert(in DT src, ref SB dst) { ClearDst(ref dst); dst.AppendFormat("{0:o}", src); }
+        public void Convert(in DZ src, ref SB dst) { ClearDst(ref dst); dst.AppendFormat("{0:o}", src); }
         #endregion ToStringBuilder
 
         #region FromR4
-        public void Convert(ref R4 src, ref R4 dst) => dst = src;
-        public void Convert(ref R4 src, ref R8 dst) => dst = src;
+        public void Convert(in R4 src, ref R4 dst) => dst = src;
+        public void Convert(in R4 src, ref R8 dst) => dst = src;
         #endregion FromR4
 
         #region FromR8
-        public void Convert(ref R8 src, ref R4 dst) => dst = (R4)src;
-        public void Convert(ref R8 src, ref R8 dst) => dst = src;
+        public void Convert(in R8 src, ref R4 dst) => dst = (R4)src;
+        public void Convert(in R8 src, ref R8 dst) => dst = src;
         #endregion FromR8
 
         #region FromTX
@@ -1061,10 +1003,10 @@ namespace Microsoft.ML.Runtime.Data.Conversion
         /// <summary>
         /// This produces zero for empty. It returns false if the text is not parsable or overflows.
         /// </summary>
-        public bool TryParse(ref TX src, out U1 dst)
+        public bool TryParse(in TX src, out U1 dst)
         {
             ulong res;
-            if (!TryParse(ref src, out res) || res > U1.MaxValue)
+            if (!TryParse(in src, out res) || res > U1.MaxValue)
             {
                 dst = 0;
                 return false;
@@ -1076,10 +1018,10 @@ namespace Microsoft.ML.Runtime.Data.Conversion
         /// <summary>
         /// This produces zero for empty. It returns false if the text is not parsable or overflows.
         /// </summary>
-        public bool TryParse(ref TX src, out U2 dst)
+        public bool TryParse(in TX src, out U2 dst)
         {
             ulong res;
-            if (!TryParse(ref src, out res) || res > U2.MaxValue)
+            if (!TryParse(in src, out res) || res > U2.MaxValue)
             {
                 dst = 0;
                 return false;
@@ -1091,10 +1033,10 @@ namespace Microsoft.ML.Runtime.Data.Conversion
         /// <summary>
         /// This produces zero for empty. It returns false if the text is not parsable or overflows.
         /// </summary>
-        public bool TryParse(ref TX src, out U4 dst)
+        public bool TryParse(in TX src, out U4 dst)
         {
             ulong res;
-            if (!TryParse(ref src, out res) || res > U4.MaxValue)
+            if (!TryParse(in src, out res) || res > U4.MaxValue)
             {
                 dst = 0;
                 return false;
@@ -1106,18 +1048,15 @@ namespace Microsoft.ML.Runtime.Data.Conversion
         /// <summary>
         /// This produces zero for empty. It returns false if the text is not parsable or overflows.
         /// </summary>
-        public bool TryParse(ref TX src, out U8 dst)
+        public bool TryParse(in TX src, out U8 dst)
         {
-            if (src.IsNA)
+            if (src.IsEmpty)
             {
                 dst = 0;
                 return false;
             }
 
-            int ichMin;
-            int ichLim;
-            string text = src.GetRawUnderlyingBufferInfo(out ichMin, out ichLim);
-            return TryParseCore(text, ichMin, ichLim, out dst);
+            return TryParseCore(src.Span, out dst);
         }
 
         /// <summary>
@@ -1128,18 +1067,17 @@ namespace Microsoft.ML.Runtime.Data.Conversion
         /// <param name="dst">The result</param>
         /// <returns>Whether the input string was parsed successfully, that is, it was exactly length 32
         /// and had only digits and the letters 'a' through 'f' or 'A' through 'F' as characters</returns>
-        public bool TryParse(ref TX src, out UG dst)
+        public bool TryParse(in TX src, out UG dst)
         {
+            var span = src.Span;
             // REVIEW: Accomodate numeric inputs?
-            if (src.Length != 34 || src[0] != '0' || (src[1] != 'x' && src[1] != 'X'))
+            if (src.Length != 34 || span[0] != '0' || (span[1] != 'x' && span[1] != 'X'))
             {
                 dst = default(UG);
                 return false;
             }
-            int ichMin;
-            int ichLim;
-            string tx = src.GetRawUnderlyingBufferInfo(out ichMin, out ichLim);
-            int offset = ichMin + 2;
+
+            int offset = 2;
             ulong hi = 0;
             ulong num = 0;
             for (int i = 0; i < 2; ++i)
@@ -1147,7 +1085,7 @@ namespace Microsoft.ML.Runtime.Data.Conversion
                 for (int d = 0; d < 16; ++d)
                 {
                     num <<= 4;
-                    char c = tx[offset++];
+                    char c = span[offset++];
                     // REVIEW: An exhaustive switch statement *might* be faster, maybe, at the
                     // cost of being significantly longer.
                     if ('0' <= c && c <= '9')
@@ -1168,7 +1106,7 @@ namespace Microsoft.ML.Runtime.Data.Conversion
                     num = 0;
                 }
             }
-            Contracts.Assert(offset == ichLim);
+            Contracts.Assert(offset == src.Length);
             // The first read bits are the higher order bits, so they are listed second here.
             dst = new UG(num, hi);
             return true;
@@ -1181,44 +1119,44 @@ namespace Microsoft.ML.Runtime.Data.Conversion
         /// The standard representations are any casing of:
         ///    ?  NaN  NA  N/A
         /// </summary>
-        private bool IsStdMissing(ref TX src)
+        private bool IsStdMissing(ref ReadOnlySpan<char> span)
         {
-            Contracts.Assert(src.HasChars);
+            Contracts.Assert(!span.IsEmpty);
 
             char ch;
-            switch (src.Length)
+            switch (span.Length)
             {
-            default:
-                return false;
+                default:
+                    return false;
 
-            case 1:
-                if (src[0] == '?')
+                case 1:
+                    if (span[0] == '?')
+                        return true;
+                    return false;
+                case 2:
+                    if ((ch = span[0]) != 'N' && ch != 'n')
+                        return false;
+                    if ((ch = span[1]) != 'A' && ch != 'a')
+                        return false;
                     return true;
-                return false;
-            case 2:
-                if ((ch = src[0]) != 'N' && ch != 'n')
-                    return false;
-                if ((ch = src[1]) != 'A' && ch != 'a')
-                    return false;
-                return true;
-            case 3:
-                if ((ch = src[0]) != 'N' && ch != 'n')
-                    return false;
-                if ((ch = src[1]) == '/')
-                {
-                    // Check for N/A.
-                    if ((ch = src[2]) != 'A' && ch != 'a')
+                case 3:
+                    if ((ch = span[0]) != 'N' && ch != 'n')
                         return false;
-                }
-                else
-                {
-                    // Check for NaN.
-                    if (ch != 'a' && ch != 'A')
-                        return false;
-                    if ((ch = src[2]) != 'N' && ch != 'n')
-                        return false;
-                }
-                return true;
+                    if ((ch = span[1]) == '/')
+                    {
+                        // Check for N/A.
+                        if ((ch = span[2]) != 'A' && ch != 'a')
+                            return false;
+                    }
+                    else
+                    {
+                        // Check for NaN.
+                        if (ch != 'a' && ch != 'A')
+                            return false;
+                        if ((ch = span[2]) != 'N' && ch != 'n')
+                            return false;
+                    }
+                    return true;
             }
         }
 
@@ -1226,11 +1164,19 @@ namespace Microsoft.ML.Runtime.Data.Conversion
         /// Utility to assist in parsing key-type values. The min and max values define
         /// the legal input value bounds. The output dst value is "normalized" so min is
         /// mapped to 1, max is mapped to 1 + (max - min).
-        /// Missing values are mapped to zero with a true return.
         /// Unparsable or out of range values are mapped to zero with a false return.
         /// </summary>
-        public bool TryParseKey(ref TX src, U8 min, U8 max, out U8 dst)
+        public bool TryParseKey(in TX src, U8 min, U8 max, out U8 dst)
         {
+            var span = src.Span;
+            // Both empty and missing map to zero (NA for key values) and that mapping is valid,
+            // hence the true return.
+            if (src.IsEmpty || IsStdMissing(ref span))
+            {
+                dst = 0;
+                return true;
+            }
+
             Contracts.Assert(min <= max);
 
             // This simply ensures we don't have min == 0 and max == U8.MaxValue. This is illegal since
@@ -1238,24 +1184,13 @@ namespace Microsoft.ML.Runtime.Data.Conversion
             // against overflow in the expression uu - min + 1 below.
             Contracts.Assert((max - min) < U8.MaxValue);
 
-            // Both empty and missing map to zero (NA for key values) and that mapping is valid,
-            // hence the true return.
-            if (!src.HasChars)
-            {
-                dst = 0;
-                return true;
-            }
-
             // Parse a ulong.
-            int ichMin;
-            int ichLim;
-            string text = src.GetRawUnderlyingBufferInfo(out ichMin, out ichLim);
             ulong uu;
-            if (!TryParseCore(text, ichMin, ichLim, out uu))
+            if (!TryParseCore(span, out uu))
             {
                 dst = 0;
                 // Return true only for standard forms for NA.
-                return IsStdMissing(ref src);
+                return false;
             }
 
             if (min > uu || uu > max)
@@ -1268,14 +1203,13 @@ namespace Microsoft.ML.Runtime.Data.Conversion
             return true;
         }
 
-        private bool TryParseCore(string text, int ich, int lim, out ulong dst)
+        private bool TryParseCore(ReadOnlySpan<char> span, out ulong dst)
         {
-            Contracts.Assert(0 <= ich && ich <= lim && lim <= Utils.Size(text));
-
             ulong res = 0;
-            while (ich < lim)
+            int ich = 0;
+            while (ich < span.Length)
             {
-                uint d = (uint)text[ich++] - (uint)'0';
+                uint d = (uint)span[ich++] - (uint)'0';
                 if (d >= 10)
                     goto LFail;
 
@@ -1301,71 +1235,90 @@ namespace Microsoft.ML.Runtime.Data.Conversion
 
         /// <summary>
         /// This produces zero for empty. It returns false if the text is not parsable or overflows.
-        /// On failure, it sets dst to the NA value.
+        /// On failure, it sets dst to the default value.
         /// </summary>
-        public bool TryParse(ref TX src, out I1 dst)
+        public bool TryParse(in TX src, out I1 dst)
         {
-            long res;
-            bool f = TryParseSigned(RawI1.MaxValue, ref src, out res);
-            Contracts.Assert(f || res == I1.RawNA);
-            Contracts.Assert((RawI1)res == res);
-            dst = (RawI1)res;
-            return f;
+            dst = default;
+            TryParseSigned(I1.MaxValue, in src, out long? res);
+            if (res == null)
+            {
+                dst = default;
+                return false;
+            }
+            Contracts.Assert(res.HasValue);
+            Contracts.Check((I1)res == res, "Overflow or underflow occured while converting value in text to sbyte.");
+            dst = (I1)res;
+            return true;
         }
 
         /// <summary>
         /// This produces zero for empty. It returns false if the text is not parsable or overflows.
-        /// On failure, it sets dst to the NA value.
+        /// On failure, it sets dst to the default value.
         /// </summary>
-        public bool TryParse(ref TX src, out I2 dst)
+        public bool TryParse(in TX src, out I2 dst)
         {
-            long res;
-            bool f = TryParseSigned(RawI2.MaxValue, ref src, out res);
-            Contracts.Assert(f || res == I2.RawNA);
-            Contracts.Assert((RawI2)res == res);
-            dst = (RawI2)res;
-            return f;
+            dst = default;
+            TryParseSigned(I2.MaxValue, in src, out long? res);
+            if (res == null)
+            {
+                dst = default;
+                return false;
+            }
+            Contracts.Assert(res.HasValue);
+            Contracts.Check((I2)res == res, "Overflow or underflow occured while converting value in text to short.");
+            dst = (I2)res;
+            return true;
         }
 
         /// <summary>
         /// This produces zero for empty. It returns false if the text is not parsable or overflows.
-        /// On failure, it sets dst to the NA value.
+        /// On failure, it sets dst to the defualt value.
         /// </summary>
-        public bool TryParse(ref TX src, out I4 dst)
+        public bool TryParse(in TX src, out I4 dst)
         {
-            long res;
-            bool f = TryParseSigned(RawI4.MaxValue, ref src, out res);
-            Contracts.Assert(f || res == I4.RawNA);
-            Contracts.Assert((RawI4)res == res);
-            dst = (RawI4)res;
-            return f;
+            dst = default;
+            TryParseSigned(I4.MaxValue, in src, out long? res);
+            if (res == null)
+            {
+                dst = default;
+                return false;
+            }
+            Contracts.Assert(res.HasValue);
+            Contracts.Check((I4)res == res, "Overflow or underflow occured while converting value in text to int.");
+            dst = (I4)res;
+            return true;
         }
 
         /// <summary>
         /// This produces zero for empty. It returns false if the text is not parsable or overflows.
-        /// On failure, it sets dst to the NA value.
+        /// On failure, it sets dst to the default value.
         /// </summary>
-        public bool TryParse(ref TX src, out I8 dst)
+        public bool TryParse(in TX src, out I8 dst)
         {
-            long res;
-            bool f = TryParseSigned(RawI8.MaxValue, ref src, out res);
-            Contracts.Assert(f || res == I8.RawNA);
-            dst = res;
-            return f;
+            dst = default;
+            TryParseSigned(I8.MaxValue, in src, out long? res);
+            if (res == null)
+            {
+                dst = default;
+                return false;
+            }
+            Contracts.Assert(res.HasValue);
+            dst = (I8)res;
+            return true;
         }
 
         /// <summary>
         /// Returns false if the text is not parsable as an non-negative long or overflows.
         /// </summary>
-        private bool TryParseNonNegative(string text, int ich, int lim, out long result)
+        private bool TryParseNonNegative(ReadOnlySpan<char> span, out long result)
         {
-            Contracts.Assert(0 <= ich && ich <= lim && lim <= Utils.Size(text));
-
             long res = 0;
-            while (ich < lim)
+            int ich = 0;
+            while (ich < span.Length)
             {
                 Contracts.Assert(res >= 0);
-                uint d = (uint)text[ich++] - (uint)'0';
+                uint d = (uint)span[ich++] - (uint)'0';
                 if (d >= 10)
                     goto LFail;
 
@@ -1389,222 +1342,193 @@ namespace Microsoft.ML.Runtime.Data.Conversion
 
         /// <summary>
         /// This produces zero for empty. It returns false if the text is not parsable as a signed integer
-        /// or the result overflows. The min legal value is -max. The NA value is -max - 1.
+        /// or the result overflows. The min legal value is -max. The NA value null.
         /// When it returns false, result is set to the NA value. The result can be NA on true return,
         /// since some representations of NA are not considered parse failure.
         /// </summary>
-        private bool TryParseSigned(long max, ref TX span, out long result)
+        private void TryParseSigned(long max, in TX text, out long? result)
         {
             Contracts.Assert(max > 0);
             Contracts.Assert((max & (max + 1)) == 0);
 
-            if (!span.HasChars)
+            if (text.IsEmpty)
             {
-                if (span.IsNA)
-                    result = -max - 1;
-                else
-                    result = 0;
-                return true;
+                result = default(long);
+                return;
             }
 
-            int ichMin;
-            int ichLim;
-            string text = span.GetRawUnderlyingBufferInfo(out ichMin, out ichLim);
-
-            long val;
+            ulong val;
+            var span = text.Span;
             if (span[0] == '-')
             {
-                if (span.Length == 1 ||
-                    !TryParseNonNegative(text, ichMin + 1, ichLim, out val) ||
-                    val > max)
+                if (span.Length == 1 || !TryParseCore(span.Slice(1), out val) || (val > ((ulong)max + 1)))
                 {
-                    result = -max - 1;
-                    return false;
+                    result = null;
+                    return;
                 }
                 Contracts.Assert(val >= 0);
                 result = -(long)val;
-                Contracts.Assert(long.MinValue < result && result <= 0);
-                return true;
+                Contracts.Assert(long.MinValue <= result && result <= 0);
+                return;
             }
 
-            if (!TryParseNonNegative(text, ichMin, ichLim, out val))
+            long sVal;
+            if (!TryParseNonNegative(span, out sVal))
             {
-                // Check for acceptable NA forms: ? NaN NA and N/A.
-                result = -max - 1;
-                return IsStdMissing(ref span);
+                result = null;
+                return;
             }
 
-            Contracts.Assert(val >= 0);
-            if (val > max)
+            Contracts.Assert(sVal >= 0);
+            if (sVal > max)
             {
-                result = -max - 1;
-                return false;
+                result = null;
+                return;
             }
 
-            result = (long)val;
+            result = (long)sVal;
             Contracts.Assert(0 <= result && result <= long.MaxValue);
-            return true;
+            return;
         }
 
         /// <summary>
         /// This produces zero for empty. It returns false if the text is not parsable.
         /// On failure, it sets dst to the NA value.
         /// </summary>
-        public bool TryParse(ref TX src, out R4 dst)
+        public bool TryParse(in TX src, out R4 dst)
         {
-            if (src.TryParse(out dst))
+            var span = src.Span;
+            if (DoubleParser.TryParse(span, out dst))
                 return true;
             dst = R4.NaN;
-            return IsStdMissing(ref src);
+            return IsStdMissing(ref span);
         }
 
         /// <summary>
         /// This produces zero for empty. It returns false if the text is not parsable.
         /// On failure, it sets dst to the NA value.
         /// </summary>
-        public bool TryParse(ref TX src, out R8 dst)
+        public bool TryParse(in TX src, out R8 dst)
         {
-            if (src.TryParse(out dst))
+            var span = src.Span;
+            if (DoubleParser.TryParse(span, out dst))
                 return true;
             dst = R8.NaN;
-            return IsStdMissing(ref src);
+            return IsStdMissing(ref span);
         }
 
-        public bool TryParse(ref TX src, out TS dst)
+        public bool TryParse(in TX src, out TS dst)
         {
-            if (!src.HasChars)
+            if (src.IsEmpty)
             {
-                if (src.IsNA)
-                    dst = TS.NA;
-                else
-                    dst = default(TS);
+                dst = default;
                 return true;
             }
-            TimeSpan res;
-            if (TimeSpan.TryParse(src.ToString(), CultureInfo.InvariantCulture, out res))
+
+            if (TimeSpan.TryParse(src.ToString(), CultureInfo.InvariantCulture, out dst))
+                return true;
+            dst = default;
+            return false;
+        }
+
+        public bool TryParse(in TX src, out DT dst)
+        {
+            if (src.IsEmpty)
             {
-                dst = new TS(res);
+                dst = default;
                 return true;
             }
-            dst = TS.NA;
-            return IsStdMissing(ref src);
+
+            if (DateTime.TryParse(src.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out dst))
+                return true;
+            dst = default;
+            return false;
         }
 
-        public bool TryParse(ref TX src, out DT dst)
+        public bool TryParse(in TX src, out DZ dst)
         {
-            if (!src.HasChars)
+            if (src.IsEmpty)
             {
-                if (src.IsNA)
-                    dst = DvDateTime.NA;
-                else
-                    dst = default(DvDateTime);
+                dst = default;
                 return true;
             }
-            DateTime res;
-            if (DateTime.TryParse(src.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out res))
-            {
-                dst = new DT(res);
+
+            if (DateTimeOffset.TryParse(src.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out dst))
                 return true;
-            }
-            dst = DvDateTime.NA;
-            return IsStdMissing(ref src);
+
+            dst = default;
+            return false;
         }
 
-        public bool TryParse(ref TX src, out DZ dst)
+        // These throw an exception for unparsable and overflow values.
+        private I1 ParseI1(in TX src)
         {
-            if (!src.HasChars)
-            {
-                if (src.IsNA)
-                    dst = DvDateTimeZone.NA;
-                else
-                    dst = default(DvDateTimeZone);
-                return true;
-            }
-            DateTimeOffset res;
-            if (DateTimeOffset.TryParse(src.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out res))
-            {
-                dst = new DZ(res);
-                return true;
-            }
-            dst = DvDateTimeZone.NA;
-            return IsStdMissing(ref src);
+            TryParseSigned(I1.MaxValue, in src, out long? res);
+            Contracts.Check(res.HasValue, "Value could not be parsed from text to sbyte.");
+            Contracts.Check((I1)res == res, "Overflow or underflow occured while converting value in text to sbyte.");
+            return (I1)res;
         }
 
-        // These map unparsable and overflow values to "NA", which is the value Ix.MinValue. Note that this NA
-        // value is the "evil" value - the non-zero value, x, such that x == -x. Note also, that for I4, this
-        // matches R's representation of NA.
-        private I1 ParseI1(ref TX src)
+        private I2 ParseI2(in TX src)
         {
-            long res;
-            bool f = TryParseSigned(RawI1.MaxValue, ref src, out res);
-            Contracts.Assert(f || res == I1.RawNA);
-            Contracts.Assert((RawI1)res == res);
-            return (RawI1)res;
+            TryParseSigned(I2.MaxValue, in src, out long? res);
+            Contracts.Check(res.HasValue, "Value could not be parsed from text to short.");
+            Contracts.Check((I2)res == res, "Overflow or underflow occured while converting value in text to short.");
+            return (I2)res;
         }
 
-        private I2 ParseI2(ref TX src)
+        private I4 ParseI4(in TX src)
         {
-            long res;
-            bool f = TryParseSigned(RawI2.MaxValue, ref src, out res);
-            Contracts.Assert(f || res == I2.RawNA);
-            Contracts.Assert((RawI2)res == res);
-            return (RawI2)res;
+            TryParseSigned(I4.MaxValue, in src, out long? res);
+            Contracts.Check(res.HasValue, "Value could not be parsed from text to int.");
+            Contracts.Check((I4)res == res, "Overflow or underflow occured while converting value in text to int.");
+            return (I4)res;
         }
 
-        private I4 ParseI4(ref TX src)
+        private I8 ParseI8(in TX src)
         {
-            long res;
-            bool f = TryParseSigned(RawI4.MaxValue, ref src, out res);
-            Contracts.Assert(f || res == I4.RawNA);
-            Contracts.Assert((RawI4)res == res);
-            return (RawI4)res;
-        }
-
-        private I8 ParseI8(ref TX src)
-        {
-            long res;
-            bool f = TryParseSigned(RawI8.MaxValue, ref src, out res);
-            Contracts.Assert(f || res == I8.RawNA);
-            return res;
+            TryParseSigned(I8.MaxValue, in src, out long? res);
+            Contracts.Check(res.HasValue, "Value could not be parsed from text to long.");
+            return res.Value;
         }
 
         // These map unparsable and overflow values to zero. The unsigned integer types do not have an NA value.
         // Note that this matches the "bad" value for key-types, which will likely be the primary use for
         // unsigned integer types.
-        private U1 ParseU1(ref TX span)
+        private U1 ParseU1(in TX span)
         {
             ulong res;
-            if (!TryParse(ref span, out res))
+            if (!TryParse(in span, out res))
                 return 0;
             if (res > U1.MaxValue)
                 return 0;
             return (U1)res;
         }
 
-        private U2 ParseU2(ref TX span)
+        private U2 ParseU2(in TX span)
         {
             ulong res;
-            if (!TryParse(ref span, out res))
+            if (!TryParse(in span, out res))
                 return 0;
             if (res > U2.MaxValue)
                 return 0;
             return (U2)res;
         }
 
-        private U4 ParseU4(ref TX span)
+        private U4 ParseU4(in TX span)
         {
             ulong res;
-            if (!TryParse(ref span, out res))
+            if (!TryParse(in span, out res))
                 return 0;
             if (res > U4.MaxValue)
                 return 0;
             return (U4)res;
         }
 
-        private U8 ParseU8(ref TX span)
+        private U8 ParseU8(in TX span)
         {
             ulong res;
-            if (!TryParse(ref span, out res))
+            if (!TryParse(in span, out res))
                 return 0;
             return res;
         }
@@ -1616,219 +1540,205 @@ namespace Microsoft.ML.Runtime.Data.Conversion
         /// * true, t, yes, y, 1, +1, + => true
         /// Empty string (but not missing string) succeeds and maps to false.
         /// </summary>
-        public bool TryParse(ref TX src, out BL dst)
+        public bool TryParse(in TX src, out BL dst)
         {
-            // NA text fails.
-            if (src.IsNA)
-            {
-                dst = BL.NA;
-                return true;
-            }
+            var span = src.Span;
 
             char ch;
             switch (src.Length)
             {
-            case 0:
-                // Empty succeeds and maps to false.
-                dst = BL.False;
-                return true;
+                case 0:
+                    // Empty succeeds and maps to false.
+                    dst = false;
+                    return true;
 
-            case 1:
-                switch (src[0])
-                {
-                case 'T':
-                case 't':
-                case 'Y':
-                case 'y':
-                case '1':
-                case '+':
-                    dst = BL.True;
-                    return true;
-                case 'F':
-                case 'f':
-                case 'N':
-                case 'n':
-                case '0':
-                case '-':
-                    dst = BL.False;
-                    return true;
-                }
-                break;
+                case 1:
+                    switch (span[0])
+                    {
+                        case 'T':
+                        case 't':
+                        case 'Y':
+                        case 'y':
+                        case '1':
+                        case '+':
+                            dst = true;
+                            return true;
+                        case 'F':
+                        case 'f':
+                        case 'N':
+                        case 'n':
+                        case '0':
+                        case '-':
+                            dst = false;
+                            return true;
+                    }
+                    break;
 
-            case 2:
-                switch (src[0])
-                {
-                case 'N':
-                case 'n':
-                    if ((ch = src[1]) != 'O' && ch != 'o')
-                        break;
-                    dst = BL.False;
-                    return true;
-                case '+':
-                    if ((ch = src[1]) != '1')
-                        break;
-                    dst = BL.True;
-                    return true;
-                case '-':
-                    if ((ch = src[1]) != '1')
-                        break;
-                    dst = BL.False;
-                    return true;
-                }
-                break;
+                case 2:
+                    switch (span[0])
+                    {
+                        case 'N':
+                        case 'n':
+                            if ((ch = span[1]) != 'O' && ch != 'o')
+                                break;
+                            dst = false;
+                            return true;
+                        case '+':
+                            if ((ch = span[1]) != '1')
+                                break;
+                            dst = true;
+                            return true;
+                        case '-':
+                            if ((ch = span[1]) != '1')
+                                break;
+                            dst = false;
+                            return true;
+                    }
+                    break;
 
-            case 3:
-                switch (src[0])
-                {
-                case 'Y':
-                case 'y':
-                    if ((ch = src[1]) != 'E' && ch != 'e')
-                        break;
-                    if ((ch = src[2]) != 'S' && ch != 's')
-                        break;
-                    dst = BL.True;
-                    return true;
-                }
-                break;
+                case 3:
+                    switch (span[0])
+                    {
+                        case 'Y':
+                        case 'y':
+                            if ((ch = span[1]) != 'E' && ch != 'e')
+                                break;
+                            if ((ch = span[2]) != 'S' && ch != 's')
+                                break;
+                            dst = true;
+                            return true;
+                    }
+                    break;
 
-            case 4:
-                switch (src[0])
-                {
-                case 'T':
-                case 't':
-                    if ((ch = src[1]) != 'R' && ch != 'r')
-                        break;
-                    if ((ch = src[2]) != 'U' && ch != 'u')
-                        break;
-                    if ((ch = src[3]) != 'E' && ch != 'e')
-                        break;
-                    dst = BL.True;
-                    return true;
-                }
-                break;
+                case 4:
+                    switch (span[0])
+                    {
+                        case 'T':
+                        case 't':
+                            if ((ch = span[1]) != 'R' && ch != 'r')
+                                break;
+                            if ((ch = span[2]) != 'U' && ch != 'u')
+                                break;
+                            if ((ch = span[3]) != 'E' && ch != 'e')
+                                break;
+                            dst = true;
+                            return true;
+                    }
+                    break;
 
-            case 5:
-                switch (src[0])
-                {
-                case 'F':
-                case 'f':
-                    if ((ch = src[1]) != 'A' && ch != 'a')
-                        break;
-                    if ((ch = src[2]) != 'L' && ch != 'l')
-                        break;
-                    if ((ch = src[3]) != 'S' && ch != 's')
-                        break;
-                    if ((ch = src[4]) != 'E' && ch != 'e')
-                        break;
-                    dst = BL.False;
-                    return true;
-                }
-                break;
+                case 5:
+                    switch (span[0])
+                    {
+                        case 'F':
+                        case 'f':
+                            if ((ch = span[1]) != 'A' && ch != 'a')
+                                break;
+                            if ((ch = span[2]) != 'L' && ch != 'l')
+                                break;
+                            if ((ch = span[3]) != 'S' && ch != 's')
+                                break;
+                            if ((ch = span[4]) != 'E' && ch != 'e')
+                                break;
+                            dst = false;
+                            return true;
+                    }
+                    break;
             }
 
-            dst = BL.NA;
-            return IsStdMissing(ref src);
+            dst = false;
+            return false;
         }
 
-        private bool TryParse(ref TX src, out TX dst)
+        private bool TryParse(in TX src, out TX dst)
         {
             dst = src;
             return true;
         }
 
-        public void Convert(ref TX span, ref I1 value)
+        public void Convert(in TX span, ref I1 value)
         {
-            value = ParseI1(ref span);
+            value = ParseI1(in span);
         }
-        public void Convert(ref TX span, ref U1 value)
+        public void Convert(in TX span, ref U1 value)
         {
-            value = ParseU1(ref span);
+            value = ParseU1(in span);
         }
-        public void Convert(ref TX span, ref I2 value)
+        public void Convert(in TX span, ref I2 value)
         {
-            value = ParseI2(ref span);
+            value = ParseI2(in span);
         }
-        public void Convert(ref TX span, ref U2 value)
+        public void Convert(in TX span, ref U2 value)
         {
-            value = ParseU2(ref span);
+            value = ParseU2(in span);
         }
-        public void Convert(ref TX span, ref I4 value)
+        public void Convert(in TX span, ref I4 value)
         {
-            value = ParseI4(ref span);
+            value = ParseI4(in span);
         }
-        public void Convert(ref TX span, ref U4 value)
+        public void Convert(in TX span, ref U4 value)
         {
-            value = ParseU4(ref span);
+            value = ParseU4(in span);
         }
-        public void Convert(ref TX span, ref I8 value)
+        public void Convert(in TX span, ref I8 value)
         {
-            value = ParseI8(ref span);
+            value = ParseI8(in span);
         }
-        public void Convert(ref TX span, ref U8 value)
+        public void Convert(in TX span, ref U8 value)
         {
-            value = ParseU8(ref span);
+            value = ParseU8(in span);
         }
-        public void Convert(ref TX span, ref UG value)
+        public void Convert(in TX span, ref UG value)
         {
-            if (!TryParse(ref span, out value))
+            if (!TryParse(in span, out value))
                 Contracts.Assert(value.Equals(default(UG)));
         }
-        public void Convert(ref TX span, ref R4 value)
+        public void Convert(in TX src, ref R4 value)
         {
-            if (span.TryParse(out value))
+            var span = src.Span;
+            if (DoubleParser.TryParse(span, out value))
                 return;
             // Unparsable is mapped to NA.
             value = R4.NaN;
         }
-        public void Convert(ref TX span, ref R8 value)
+        public void Convert(in TX src, ref R8 value)
         {
-            if (span.TryParse(out value))
+            var span = src.Span;
+            if (DoubleParser.TryParse(span, out value))
                 return;
             // Unparsable is mapped to NA.
             value = R8.NaN;
         }
-        public void Convert(ref TX span, ref TX value)
+        public void Convert(in TX span, ref TX value)
         {
             value = span;
         }
-        public void Convert(ref TX span, ref BL value)
+        public void Convert(in TX src, ref BL value)
         {
-            // When TryParseBL returns false, it should have set value to NA.
-            if (!TryParse(ref span, out value))
-                Contracts.Assert(value.IsNA);
+            // When TryParseBL returns false, it should have set value to false.
+            if (!TryParse(in src, out value))
+                Contracts.Assert(!value);
         }
-        public void Convert(ref TX src, ref SB dst)
+        public void Convert(in TX src, ref SB dst)
         {
             ClearDst(ref dst);
-            if (src.HasChars)
-                src.AddToStringBuilder(dst);
+            if (!src.IsEmpty)
+                dst.AppendMemory(src);
         }
 
-        public void Convert(ref TX span, ref TS value)
-        {
-            if (!TryParse(ref span, out value))
-                Contracts.Assert(value.IsNA);
-        }
-        public void Convert(ref TX span, ref DT value)
-        {
-            if (!TryParse(ref span, out value))
-                Contracts.Assert(value.IsNA);
-        }
-        public void Convert(ref TX span, ref DZ value)
-        {
-            if (!TryParse(ref span, out value))
-                Contracts.Assert(value.IsNA);
-        }
+        public void Convert(in TX span, ref TS value) => TryParse(in span, out value);
+        public void Convert(in TX span, ref DT value) => TryParse(in span, out value);
+        public void Convert(in TX span, ref DZ value) => TryParse(in span, out value);
+
         #endregion FromTX
 
         #region FromBL
-        public void Convert(ref BL src, ref I1 dst) => dst = (I1)src;
-        public void Convert(ref BL src, ref I2 dst) => dst = (I2)src;
-        public void Convert(ref BL src, ref I4 dst) => dst = (I4)src;
-        public void Convert(ref BL src, ref I8 dst) => dst = (I8)src;
-        public void Convert(ref BL src, ref R4 dst) => dst = (R4)src;
-        public void Convert(ref BL src, ref R8 dst) => dst = (R8)src;
-        public void Convert(ref BL src, ref BL dst) => dst = src;
+        public void Convert(in BL src, ref I1 dst) => dst = (I1)(object)src;
+        public void Convert(in BL src, ref I2 dst) => dst = (I2)(object)src;
+        public void Convert(in BL src, ref I4 dst) => dst = (I4)(object)src;
+        public void Convert(in BL src, ref I8 dst) => dst = (I8)(object)src;
+        public void Convert(in BL src, ref R4 dst) => dst = System.Convert.ToSingle(src);
+        public void Convert(in BL src, ref R8 dst) => dst = System.Convert.ToDouble(src);
+        public void Convert(in BL src, ref BL dst) => dst = src;
         #endregion FromBL
     }
 }

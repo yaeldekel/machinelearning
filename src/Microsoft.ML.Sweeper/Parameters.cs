@@ -9,7 +9,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
-using Microsoft.ML;
 using Microsoft.ML.Runtime;
 using Microsoft.ML.Runtime.CommandLine;
 using Microsoft.ML.Runtime.Internal.Utilities;
@@ -513,7 +512,7 @@ namespace Microsoft.ML.Runtime.Sweeper
         /// Generic parameter parser. Currently hand-hacked to auto-detect type.
         ///
         /// Generic form:   Name:Values
-        /// e.g.:    lr:0.05-0.4
+        /// for example,    lr:0.05-0.4
         ///          lambda:0.1-1000@log10
         ///          nl:2-64@log2
         ///          norm:-,+
@@ -556,7 +555,7 @@ namespace Microsoft.ML.Runtime.Sweeper
             }
 
             // Extract the minimum, and the maximum value of the list of suggested sweeps.
-            // Positive lookahead splitting at the '-' character. 
+            // Positive lookahead splitting at the '-' character.
             // It is used for the Float and Long param types.
             // Example format: "0.02-0.1;steps:5".
             string[] minMaxRegex = Regex.Split(paramValue, "(?<=[^eE])-");
@@ -588,7 +587,7 @@ namespace Microsoft.ML.Runtime.Sweeper
                         }
                         if (option.StartsWith("steps"))
                         {
-                            numSteps = Int32.Parse(option.Substring(option.IndexOf(':') + 1));
+                            numSteps = int.Parse(option.Substring(option.IndexOf(':') + 1));
                             optionsSpecified[1] = true;
                         }
                         if (option.StartsWith("inc"))
@@ -613,9 +612,9 @@ namespace Microsoft.ML.Runtime.Sweeper
             if (paramType == typeof(UInt16)
                 || paramType == typeof(UInt32)
                 || paramType == typeof(UInt64)
-                || paramType == typeof(Int16)
-                || paramType == typeof(Int32)
-                || paramType == typeof(Int64))
+                || paramType == typeof(short)
+                || paramType == typeof(int)
+                || paramType == typeof(long))
             {
                 long min;
                 long max;

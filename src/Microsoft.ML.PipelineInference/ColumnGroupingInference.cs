@@ -42,7 +42,7 @@ namespace Microsoft.ML.Runtime.PipelineInference
             }
         }
 
-        public struct InferenceResult
+        public readonly struct InferenceResult
         {
             public readonly GroupingColumn[] Columns;
 
@@ -56,7 +56,7 @@ namespace Microsoft.ML.Runtime.PipelineInference
         /// Group together the single-valued columns with the same type and purpose and generate column names.
         /// </summary>
         /// <param name="env">The host environment to use.</param>
-        /// <param name="hasHeader">Whether the original file had a header. 
+        /// <param name="hasHeader">Whether the original file had a header.
         /// If yes, the <see cref="ColumnTypeInference.Column.SuggestedName"/> fields are used to generate the column
         /// names, otherwise they are ignored.</param>
         /// <param name="types">The (detected) column types.</param>
@@ -96,8 +96,6 @@ namespace Microsoft.ML.Runtime.PipelineInference
                         ch.Info("Grouped data from columns '{0}' into vector column '{1}'.", range, name);
                     result.Add(new GroupingColumn(name, g.Key.ItemType.RawKind, g.Key.Purpose, range));
                 }
-
-                ch.Done();
             }
 
             return new InferenceResult(result.ToArray());

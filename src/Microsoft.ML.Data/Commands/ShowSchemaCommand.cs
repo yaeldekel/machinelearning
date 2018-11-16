@@ -59,7 +59,6 @@ namespace Microsoft.ML.Runtime.Data
             using (var ch = Host.Start(LoadName))
             {
                 RunCore(ch);
-                ch.Done();
             }
         }
 
@@ -132,7 +131,7 @@ namespace Microsoft.ML.Runtime.Data
             var itw = IndentingTextWriter.Wrap(writer);
             using (itw.Nest())
             {
-                var names = default(VBuffer<DvText>);
+                var names = default(VBuffer<ReadOnlyMemory<char>>);
                 for (int col = 0; col < colLim; col++)
                 {
                     var name = schema.GetColumnName(col);
@@ -171,7 +170,7 @@ namespace Microsoft.ML.Runtime.Data
                         bool verbose = args.Verbose ?? false;
                         foreach (var kvp in names.Items(all: verbose))
                         {
-                            if (verbose || kvp.Value.HasChars)
+                            if (verbose || !kvp.Value.IsEmpty)
                                 itw.WriteLine("{0}:{1}", kvp.Key, kvp.Value);
                         }
                     }
@@ -240,7 +239,7 @@ namespace Microsoft.ML.Runtime.Data
             var value = default(T);
             var sb = default(StringBuilder);
             schema.GetMetadata(kind, col, ref value);
-            conv(ref value, ref sb);
+            conv(in value, ref sb);
 
             itw.Write(": '{0}'", sb);
         }
@@ -280,7 +279,7 @@ namespace Microsoft.ML.Runtime.Data
             var value = default(VBuffer<T>);
             schema.GetMetadata(kind, col, ref value);
 
-            itw.Write(": Length={0}, Count={0}", value.Length, value.Count);
+            itw.Write(": Length={0}, Count={0}", value.Length, value.GetValues().Length);
 
             using (itw.Nest())
             {
@@ -293,7 +292,7 @@ namespace Microsoft.ML.Runtime.Data
                     else
                         itw.Write(", ");
                     var val = item.Value;
-                    conv(ref val, ref sb);
+                    conv(in val, ref sb);
                     itw.Write("[{0}] '{1}'", item.Key, sb);
                     count++;
                 }

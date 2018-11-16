@@ -2,9 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using Float = System.Single;
-
-using System;
+using Microsoft.ML.Core.Data;
 using Microsoft.ML.Runtime;
 using Microsoft.ML.Runtime.CommandLine;
 using Microsoft.ML.Runtime.Data;
@@ -13,6 +11,8 @@ using Microsoft.ML.Runtime.Learners;
 using Microsoft.ML.Runtime.Numeric;
 using Microsoft.ML.Runtime.Training;
 using Microsoft.ML.Runtime.Internal.Internallearn;
+using Microsoft.ML.Trainers.Online;
+using System;
 
 [assembly: LoadableClass(OnlineGradientDescentTrainer.Summary, typeof(OnlineGradientDescentTrainer), typeof(OnlineGradientDescentTrainer.Arguments),
     new[] { typeof(SignatureRegressorTrainer), typeof(SignatureTrainer), typeof(SignatureFeatureScorerTrainer) },
@@ -23,16 +23,16 @@ using Microsoft.ML.Runtime.Internal.Internallearn;
     "stochasticgradientdescentregression")]
 [assembly: LoadableClass(typeof(void), typeof(OnlineGradientDescentTrainer), null, typeof(SignatureEntryPointModule), "OGD")]
 
-namespace Microsoft.ML.Runtime.Learners
+namespace Microsoft.ML.Trainers.Online
 {
-    using TPredictor = LinearRegressionPredictor;
 
-    public sealed class OnlineGradientDescentTrainer : AveragedLinearTrainer<OnlineGradientDescentTrainer.Arguments, TPredictor>
+    /// <include file='doc.xml' path='doc/members/member[@name="OGD"]/*' />
+    public sealed class OnlineGradientDescentTrainer : AveragedLinearTrainer<RegressionPredictionTransformer<LinearRegressionPredictor>, LinearRegressionPredictor>
     {
         internal const string LoadNameValue = "OnlineGradientDescent";
         internal const string UserNameValue = "Stochastic Gradient Descent (Regression)";
         internal const string Summary = "Stochastic gradient descent is an optimization method used to train a wide range of models in machine learning. "
-            + "In the TLC implementation of SGD, it is for linear regression.";
+            + "In the TLC implementation of OGD, it is for linear regression.";
         internal const string ShortName = "ogd";
 
         public sealed class Arguments : AveragedLinearArguments
@@ -46,50 +46,128 @@ namespace Microsoft.ML.Runtime.Learners
             /// </summary>
             public Arguments()
             {
-                LearningRate = (Float)0.1;
-                DecreaseLearningRate = true;
+                LearningRate = OgdDefaultArgs.LearningRate;
+                DecreaseLearningRate = OgdDefaultArgs.DecreaseLearningRate;
+            }
+
+            internal override IComponentFactory<IScalarOutputLoss> LossFunctionFactory => LossFunction;
+
+            internal class OgdDefaultArgs : AveragedDefaultArgs
+            {
+                internal new const float LearningRate = 0.1f;
+                internal new const bool DecreaseLearningRate = true;
             }
         }
 
-        public OnlineGradientDescentTrainer(IHostEnvironment env, Arguments args)
-            : base(args, env, UserNameValue)
+        private sealed class TrainState : AveragedTrainStateBase
+        {
+            public TrainState(IChannel ch, int numFeatures, LinearPredictor predictor, OnlineGradientDescentTrainer parent)
+                : base(ch, numFeatures, predictor, parent)
+            {
+            }
+
+            public override LinearRegressionPredictor CreatePredictor()
+            {
+                Contracts.Assert(WeightsScale == 1);
+                VBuffer<float> weights = default;
+                float bias;
+
+                if (!Averaged)
+                {
+                    Weights.CopyTo(ref weights);
+                    bias = Bias;
+                }
+                else
+                {
+                    TotalWeights.CopyTo(ref weights);
+                    VectorUtils.ScaleBy(ref weights, 1 / (float)NumWeightUpdates);
+                    bias = TotalBias / (float)NumWeightUpdates;
+                }
+                return new LinearRegressionPredictor(ParentHost, in weights, bias);
+            }
+        }
+
+        /// <summary>
+        /// Trains a new <see cref="RegressionPredictionTransformer{LinearRegressionPredictor}"/>.
+        /// </summary>
+        /// <param name="env">The pricate instance of <see cref="IHostEnvironment"/>.</param>
+        /// <param name="labelColumn">Name of the label column.</param>
+        /// <param name="featureColumn">Name of the feature column.</param>
+        /// <param name="learningRate">The learning Rate.</param>
+        /// <param name="decreaseLearningRate">Decrease learning rate as iterations progress.</param>
+        /// <param name="l2RegularizerWeight">L2 Regularization Weight.</param>
+        /// <param name="numIterations">Number of training iterations through the data.</param>
+        /// <param name="weightsColumn">The name of the weights column.</param>
+        /// <param name="lossFunction">The custom loss functions. Defaults to <see cref="SquaredLoss"/> if not provided.</param>
+        /// <param name="advancedSettings">A delegate to supply advanced arguments to the algorithm. </param>
+        public OnlineGradientDescentTrainer(IHostEnvironment env,
+            string labelColumn = DefaultColumnNames.Label,
+            string featureColumn = DefaultColumnNames.Features,
+            float learningRate = Arguments.OgdDefaultArgs.LearningRate,
+            bool decreaseLearningRate = Arguments.OgdDefaultArgs.DecreaseLearningRate,
+            float l2RegularizerWeight = Arguments.OgdDefaultArgs.L2RegularizerWeight,
+            int numIterations = Arguments.OgdDefaultArgs.NumIterations,
+            string weightsColumn = null,
+            IRegressionLoss lossFunction = null,
+            Action<Arguments> advancedSettings = null)
+            : this(env, InvokeAdvanced(advancedSettings, new Arguments
+            {
+                LearningRate = learningRate,
+                DecreaseLearningRate = decreaseLearningRate,
+                L2RegularizerWeight = l2RegularizerWeight,
+                NumIterations = numIterations,
+                LabelColumn = labelColumn,
+                FeatureColumn = featureColumn,
+                InitialWeights = weightsColumn,
+                LossFunction = new TrivialFactory(lossFunction ?? new SquaredLoss())
+            }))
+        {
+        }
+
+        private sealed class TrivialFactory : ISupportRegressionLossFactory
+        {
+            private IRegressionLoss _loss;
+
+            public TrivialFactory(IRegressionLoss loss)
+            {
+                _loss = loss;
+            }
+
+            IRegressionLoss IComponentFactory<IRegressionLoss>.CreateComponent(IHostEnvironment env) => _loss;
+        }
+
+        internal OnlineGradientDescentTrainer(IHostEnvironment env, Arguments args)
+        : base(args, env, UserNameValue, TrainerUtils.MakeR4ScalarLabel(args.LabelColumn))
         {
             LossFunction = args.LossFunction.CreateComponent(env);
         }
 
-        public override bool NeedCalibration
+        public override PredictionKind PredictionKind => PredictionKind.Regression;
+
+        protected override SchemaShape.Column[] GetOutputColumnsCore(SchemaShape inputSchema)
         {
-            get { return false; }
+            return new[]
+            {
+                new SchemaShape.Column(DefaultColumnNames.Score, SchemaShape.Column.VectorKind.Scalar, NumberType.R4, false, new SchemaShape(MetadataUtils.GetTrainerOutputMetadata()))
+            };
         }
 
-        public override PredictionKind PredictionKind { get { return PredictionKind.Regression; } }
-
-        protected override void CheckLabel(RoleMappedData data)
+        protected override void CheckLabels(RoleMappedData data)
         {
             data.CheckRegressionLabel();
         }
 
-        public override TPredictor CreatePredictor()
+        private protected override TrainStateBase MakeState(IChannel ch, int numFeatures, LinearPredictor predictor)
         {
-            Contracts.Assert(WeightsScale == 1);
-            VBuffer<Float> weights = default(VBuffer<Float>);
-            Float bias;
-
-            if (!Args.Averaged)
-            {
-                Weights.CopyTo(ref weights);
-                bias = Bias;
-            }
-            else
-            {
-                TotalWeights.CopyTo(ref weights);
-                VectorUtils.ScaleBy(ref weights, 1 / (Float)NumWeightUpdates);
-                bias = TotalBias / (Float)NumWeightUpdates;
-            }
-            return new LinearRegressionPredictor(Host, ref weights, bias);
+            return new TrainState(ch, numFeatures, predictor, this);
         }
 
-        [TlcModule.EntryPoint(Name = "Trainers.OnlineGradientDescentRegressor", Desc = "Train a Online gradient descent perceptron.", UserName = UserNameValue, ShortName = OnlineGradientDescentTrainer.ShortName)]
+        [TlcModule.EntryPoint(Name = "Trainers.OnlineGradientDescentRegressor",
+            Desc = "Train a Online gradient descent perceptron.",
+            UserName = UserNameValue,
+            ShortName = ShortName,
+            XmlInclude = new[] { @"<include file='../Microsoft.ML.StandardLearners/Standard/Online/doc.xml' path='doc/members/member[@name=""OGD""]/*' />",
+                                 @"<include file='../Microsoft.ML.StandardLearners/Standard/Online/doc.xml' path='doc/members/example[@name=""OGD""]/*' />"})]
         public static CommonOutputs.RegressionOutput TrainRegression(IHostEnvironment env, Arguments input)
         {
             Contracts.CheckValue(env, nameof(env));
@@ -101,5 +179,8 @@ namespace Microsoft.ML.Runtime.Learners
                 () => new OnlineGradientDescentTrainer(host, input),
                 () => LearnerEntryPointsUtils.FindColumn(host, input.TrainingData.Schema, input.LabelColumn));
         }
+
+        protected override RegressionPredictionTransformer<LinearRegressionPredictor> MakeTransformer(LinearRegressionPredictor model, Schema trainSchema)
+        => new RegressionPredictionTransformer<LinearRegressionPredictor>(Host, model, trainSchema, FeatureColumn.Name);
     }
 }
