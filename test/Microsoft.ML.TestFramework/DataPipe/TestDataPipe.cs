@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using Microsoft.ML.CommandLine;
 using Microsoft.ML.Data;
+using Microsoft.ML.Data.DataView;
 using Microsoft.ML.Internal.Utilities;
 using Microsoft.ML.Runtime;
 using Microsoft.ML.TestFrameworkCommon;
@@ -1298,6 +1299,30 @@ namespace Microsoft.ML.RunTests
             SaveLoad(view, Env);
 
             Done();
+        }
+
+        [Fact]
+        public void TestBatchTransform()
+        {
+            var bldr = new ArrayDataViewBuilder(Env);
+            bldr.AddColumn("Input", NumberDataViewType.Single, new[] { 1f, 2f, 3f, 2f, 3f, 4f, 3f, 4f, 5f, 4f });
+            var input = bldr.GetDataView();
+
+            var output = new BatchTransform(Env, input, "Input", "Output", 3);
+            using (var cursor = output.GetRowCursor(output.Schema))
+            {
+                var inputGetter = cursor.GetGetter<float>(cursor.Schema["Input"]);
+                var outputGetter = cursor.GetGetter<float>(cursor.Schema["Output"]);
+                Log("Input\tOutput");
+                while (cursor.MoveNext())
+                {
+                    var src = 0f;
+                    var dst = 0f;
+                    inputGetter(ref src);
+                    outputGetter(ref dst);
+                    Log($"{src}\t{dst}");
+                }
+            }
         }
 
         [Fact]
